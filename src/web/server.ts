@@ -173,13 +173,18 @@ app.post('/upload', (req: any, res: any) => {
 // helper function to normalize audio
 async function normalizeAudio(inputPath: string, outputPath: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg');
+    const ffmpeg = require('fluent-ffmpeg')
+    
+    // check for webm extension and fix common typo
+    if (outputPath.endsWith('.ebm')) {
+      outputPath = outputPath.replace('.ebm', '.webm')
+    }
     
     // first analyze the volume
     ffmpeg.ffprobe(inputPath, (err: any, metadata: any) => {
       if (err) {
-        reject(new Error(`failed to analyze media: ${err.message}`));
-        return;
+        reject(new Error(`failed to analyze media: ${err.message}`))
+        return
       }
       
       // analyze volume
@@ -189,15 +194,15 @@ async function normalizeAudio(inputPath: string, outputPath: string): Promise<vo
         .output('/dev/null')
         .on('error', (err: any) => reject(new Error(`volume analysis failed: ${err.message}`)))
         .on('end', (stdout: any, stderr: any) => {
-          const match = stderr.match(/max_volume: ([-\d.]+) dB/);
+          const match = stderr.match(/max_volume: ([-\d.]+) dB/)
           if (!match || !match[1]) {
-            reject(new Error('couldnt detect volume level'));
-            return;
+            reject(new Error('couldnt detect volume level'))
+            return
           }
           
-          const maxVolume = parseFloat(match[1]);
-          const targetVolume = -3; // target peak volume in dB
-          const adjustment = targetVolume - maxVolume;
+          const maxVolume = parseFloat(match[1])
+          const targetVolume = -3 // target peak volume in dB
+          const adjustment = targetVolume - maxVolume
           
           // normalize with the calculated adjustment
           ffmpeg(inputPath)
@@ -205,13 +210,13 @@ async function normalizeAudio(inputPath: string, outputPath: string): Promise<vo
             .output(outputPath)
             .on('error', (err: any) => reject(new Error(`normalization failed: ${err.message}`)))
             .on('end', () => {
-              resolve();
+              resolve()
             })
-            .run();
+            .run()
         })
-        .run();
-    });
-  });
+        .run()
+    })
+  })
 }
 
 // helper function to get media duration

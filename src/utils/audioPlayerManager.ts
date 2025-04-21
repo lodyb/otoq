@@ -178,11 +178,16 @@ export class AudioPlayerManager {
     
     // check if already playing
     if (this.isPlaying.get(guildId)) {
+      console.log(`already playing something for guild ${guildId}, stopping first`)
       this.stopPlaying(guildId);
+      
+      // add small delay to ensure clean state
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     // validate media
     if (this.corruptedMedia.has(media.id)) {
+      console.log(`media #${media.id} is marked as corrupted, skipping`)
       return false;
     }
     
@@ -474,15 +479,15 @@ export class AudioPlayerManager {
     return new Promise((resolve, reject) => {
       ffmpeg.ffprobe(filePath, (err, metadata) => {
         if (err) {
-          reject(err);
-          return;
+          reject(err)
+          return
         }
         
-        const duration = Math.floor((metadata?.format?.duration || 0) * 1000);
-        this.mediaDurations.set(mediaId, duration);
-        resolve(duration);
-      });
-    });
+        const duration = Math.floor((metadata?.format?.duration || 0) * 1000)
+        this.mediaDurations.set(mediaId, duration)
+        resolve(duration)
+      })
+    })
   }
   
   public storeMediaDuration(mediaId: number, durationMs: number): void {
@@ -536,14 +541,14 @@ export class AudioPlayerManager {
     });
   }
   
-  private async createNormalizedFile(filePath: string, volAdjustment: number): Promise<string> {
-    const ext = path.extname(filePath);
-    const tempFile = path.join(process.cwd(), 'temp', `norm_${Date.now()}${ext}`);
+  public async createNormalizedFile(filePath: string, volAdjustment: number): Promise<string> {
+    const ext = path.extname(filePath)
+    let tempFile = path.join(process.cwd(), 'temp', `norm_${Date.now()}${ext}`)
     
     // ensure temp dir exists
-    const tempDir = path.dirname(tempFile);
+    const tempDir = path.dirname(tempFile)
     if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+      fs.mkdirSync(tempDir, { recursive: true })
     }
     
     return new Promise((resolve, reject) => {
@@ -552,8 +557,8 @@ export class AudioPlayerManager {
         .output(tempFile)
         .on('error', reject)
         .on('end', () => resolve(tempFile))
-        .run();
-    });
+        .run()
+    })
   }
   
   private loadVolumeCache(): void {
@@ -678,9 +683,9 @@ export class AudioPlayerManager {
   }
 
   private isVideoFile(filePath: string): boolean {
-    const ext = path.extname(filePath).toLowerCase();
-    const videoExts = ['.mp4', '.m4a', '.mkv', '.avi', '.mov', '.webm', '.flv'];
-    return videoExts.includes(ext);
+    const ext = path.extname(filePath).toLowerCase()
+    const videoExts = ['.mp4', '.m4a', '.mkv', '.avi', '.mov', '.webm', '.flv']
+    return videoExts.includes(ext)
   }
 
   private async extractRandomFrame(filePath: string): Promise<string | null> {

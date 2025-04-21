@@ -159,12 +159,33 @@ export class GameManager {
     console.log(`waiting ${this.ROUND_TRANSITION_DELAY}ms before starting next round`);
     return new Promise((resolve) => {
       setTimeout(async () => {
-        // play it
-        const audioPlayer = AudioPlayerManager.getInstance();
-        const success = await audioPlayer.playMedia(guildId, nextMedia, session.isClipMode());
-        
-        this.roundTransitionInProgress.set(key, false);
-        resolve(success);
+        try {
+          // get audio player before timeout
+          const audioPlayer = AudioPlayerManager.getInstance();
+          
+          // ensure player is stopped from previous round
+          audioPlayer.stopPlaying(guildId);
+          
+          // play new media - with a small delay to ensure previous playback is fully stopped
+          setTimeout(async () => {
+            try {
+              // play new media
+              const success = await audioPlayer.playMedia(guildId, nextMedia, session.isClipMode());
+              
+              // resolve promise regardless to prevent hanging
+              this.roundTransitionInProgress.set(key, false);
+              resolve(success);
+            } catch (err) {
+              console.error('error playing media during round advance:', err);
+              this.roundTransitionInProgress.set(key, false);
+              resolve(false);
+            }
+          }, 500); // small additional delay to ensure clean state
+        } catch (err) {
+          console.error('error during round transition:', err);
+          this.roundTransitionInProgress.set(key, false);
+          resolve(false);
+        }
       }, this.ROUND_TRANSITION_DELAY);
     });
   }
