@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otoq batch uploader</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+      color: #333;
+    }
+    
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .dropzone {
+      border: 3px dashed #ccc;
+      border-radius: 10px;
+      padding: 30px;
+      text-align: center;
+      background-color: #fff;
+      cursor: pointer;
+      transition: border-color 0.3s;
+    }
+    
+    .dropzone:hover, .dropzone.dragover {
+      border-color: #888;
+    }
+    
+    #file-input {
+      display: none;
+    }
+    
+    .media-list {
+      margin-top: 30px;
+    }
+    
+    .media-item {
+      background-color: #fff;
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    .media-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .media-title {
+      font-weight: bold;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    
+    textarea {
+      width: 100%;
+      height: 80px;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      resize: vertical;
+      margin: 10px 0;
+    }
+    
+    button {
+      padding: 8px 15px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    
+    button:hover {
+      background-color: #3e8e41;
+    }
+    
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    
+    .status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 5px;
+    }
+    
+    .status.success {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    
+    .status.error {
+      background-color: #ffebee;
+      color: #c62828;
+    }
+    
+    .progress {
+      height: 5px;
+      width: 100%;
+      background-color: #f0f0f0;
+      border-radius: 3px;
+      margin-top: 10px;
+    }
+    
+    .progress-bar {
+      height: 100%;
+      width: 0;
+      background-color: #4CAF50;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+    
+    .emoji {
+      font-size: 1.2em;
+    }
+    
+    .loading {
+      display: inline-block;
+      animation: spin 2s linear infinite;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .tooltip {
+      display: none;
+      position: absolute;
+      background: #333;
+      color: #fff;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 14px;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <h1>otoq batch uploader <span class="emoji">⌐■_■</span></h1>
+  
+  <div class="dropzone" id="dropzone">
+    <p>drop audio/video files here or click to browse</p>
+    <p class="emoji">♪(´ε｀ )</p>
+    <input type="file" id="file-input" multiple accept="audio/*,video/*,.mp3,.mp4,.m4a,.wav,.flac,.ogg,.mkv,.mov,.avi">
+  </div>
+  
+  <div class="media-list" id="media-list"></div>
+  
+  <div class="tooltip" id="tooltip"></div>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const dropzone = document.getElementById('dropzone');
+      const fileInput = document.getElementById('file-input');
+      const mediaList = document.getElementById('media-list');
+      const tooltip = document.getElementById('tooltip');
+      
+      // drag and drop functionality
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+      
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('dragover');
+      });
+      
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        
+        if (e.dataTransfer.files.length > 0) {
+          handleFiles(e.dataTransfer.files);
+        }
+      });
+      
+      dropzone.addEventListener('click', () => {
+        fileInput.click();
+      });
+      
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files.length > 0) {
+          handleFiles(fileInput.files);
+        }
+      });
+      
+      function handleFiles(files) {
+        Array.from(files).forEach(file => {
+          if (isMediaFile(file)) {
+            createMediaItem(file);
+          } else {
+            showTooltip(`${file.name} is not a valid media file baka!`);
+          }
+        });
+      }
+      
+      function isMediaFile(file) {
+        const validTypes = [
+          'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/flac', 'audio/ogg',
+          'video/mp4', 'video/m4a', 'audio/mpeg', 'video/webm', 'video/avi', 'video/mov', 'video/mkv',
+          'application/ogg', 'application/octet-stream'
+        ];
+        
+        const validExtensions = ['.mp3', '.mp4', '.m4a', '.wav', '.flac', '.mov', '.wmv', '.ogg', '.mkv', '.avi'];
+        const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+        
+        return validTypes.includes(file.type) || validExtensions.includes(ext);
+      }
+      
+      function createMediaItem(file) {
+        const mediaItem = document.createElement('div');
+        mediaItem.className = 'media-item';
+        
+        const mediaHeader = document.createElement('div');
+        mediaHeader.className = 'media-header';
+        
+        const mediaTitle = document.createElement('div');
+        mediaTitle.className = 'media-title';
+        mediaTitle.textContent = file.name;
+        
+        const fileSize = document.createElement('div');
+        fileSize.textContent = formatFileSize(file.size);
+        
+        mediaHeader.appendChild(mediaTitle);
+        mediaHeader.appendChild(fileSize);
+        
+        const answersLabel = document.createElement('div');
+        answersLabel.textContent = 'answers (one per line, first line is primary):';
+        
+        const answersInput = document.createElement('textarea');
+        answersInput.placeholder = 'enter answer here\nalternative answer\nanother alternative';
+        
+        // pre-populate with filename (without extension) as default answer
+        const filename = file.name.substring(0, file.name.lastIndexOf('.'))
+          .replace(/_/g, ' ')
+          .replace(/-/g, ' ');
+        answersInput.value = filename;
+        
+        const uploadButton = document.createElement('button');
+        uploadButton.textContent = 'upload';
+        
+        const progressContainer = document.createElement('div');
+        progressContainer.className = 'progress';
+        progressContainer.style.display = 'none';
+        
+        const progressBar = document.createElement('div');
+        progressBar.className = 'progress-bar';
+        
+        progressContainer.appendChild(progressBar);
+        
+        const statusContainer = document.createElement('div');
+        statusContainer.className = 'status';
+        statusContainer.style.display = 'none';
+        
+        mediaItem.appendChild(mediaHeader);
+        mediaItem.appendChild(answersLabel);
+        mediaItem.appendChild(answersInput);
+        mediaItem.appendChild(uploadButton);
+        mediaItem.appendChild(progressContainer);
+        mediaItem.appendChild(statusContainer);
+        
+        mediaList.appendChild(mediaItem);
+        
+        uploadButton.addEventListener('click', () => {
+          uploadMedia(file, answersInput.value, uploadButton, progressContainer, progressBar, statusContainer);
+        });
+      }
+      
+      function uploadMedia(file, answers, button, progressContainer, progressBar, statusContainer) {
+        if (!answers.trim()) {
+          showStatus(statusContainer, 'you need to provide at least one answer baka (ノಠ益ಠ)ノ彡┻━┻', 'error');
+          return;
+        }
+        
+        const formData = new FormData();
+        formData.append('media', file);
+        formData.append('answers', answers);
+        
+        const xhr = new XMLHttpRequest();
+        
+        xhr.open('POST', '/upload', true);
+        
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const percentComplete = (e.loaded / e.total) * 100;
+            progressBar.style.width = percentComplete + '%';
+          }
+        };
+        
+        xhr.onloadstart = () => {
+          button.disabled = true;
+          progressContainer.style.display = 'block';
+          statusContainer.style.display = 'none';
+          progressBar.style.width = '0%';
+        };
+        
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            const response = JSON.parse(xhr.responseText);
+            showStatus(statusContainer, `${response.message}`, 'success');
+            button.textContent = 'uploaded ✓';
+            button.disabled = true;
+          } else {
+            try {
+              const response = JSON.parse(xhr.responseText);
+              showStatus(statusContainer, response.error || 'upload failed (￢_￢)', 'error');
+            } catch (e) {
+              showStatus(statusContainer, 'upload failed (￢_￢)', 'error');
+            }
+            button.disabled = false;
+          }
+        };
+        
+        xhr.onerror = () => {
+          showStatus(statusContainer, 'network error (╯°□°）╯︵ ┻━┻', 'error');
+          button.disabled = false;
+        };
+        
+        xhr.send(formData);
+      }
+      
+      function showStatus(container, message, type) {
+        container.textContent = message;
+        container.className = `status ${type}`;
+        container.style.display = 'block';
+      }
+      
+      function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        else return (bytes / 1048576).toFixed(1) + ' MB';
+      }
+      
+      function showTooltip(message) {
+        tooltip.textContent = message;
+        tooltip.style.display = 'block';
+        tooltip.style.left = (window.innerWidth / 2 - tooltip.offsetWidth / 2) + 'px';
+        tooltip.style.top = '20px';
+        
+        setTimeout(() => {
+          tooltip.style.display = 'none';
+        }, 3000);
+      }
+    });
+  </script>
+</body>
+</html>
