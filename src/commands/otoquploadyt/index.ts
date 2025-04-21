@@ -49,6 +49,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   await interaction.deferReply({ ephemeral: true });
   
   try {
+    // Check if yt-dlp is installed
+    try {
+      await execPromise('yt-dlp --version');
+    } catch (error) {
+      await interaction.editReply('yt-dlp is not installed. Please install it first with `npm install -g yt-dlp` or `pip install yt-dlp` (╯°□°）╯︵ ┻━┻');
+      return;
+    }
+    
     // Create media directory if it doesn't exist
     if (!fs.existsSync(MEDIA_DIR)) {
       fs.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -57,7 +65,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Get video info to pre-populate the answer field
     await interaction.editReply('fetching video info... (￣ー￣)ゞ');
     
-    const videoInfo = await getYoutubeVideoInfo(youtubeUrl);
+    let videoInfo;
+    try {
+      videoInfo = await getYoutubeVideoInfo(youtubeUrl);
+    } catch (error) {
+      await interaction.editReply(`failed to get YouTube info: ${error.message} (╯°□°）╯︵ ┻━┻`);
+      return;
+    }
+    
     const videoTitle = videoInfo.title || 'Unknown Title';
     
     const modal = new ModalBuilder()
@@ -100,11 +115,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       try {
         await modalInteraction.editReply('downloading from YouTube... this might take a bit (￣ー￣)ゞ');
         
-        // Download YouTube audio using yt-dlp
-        const fileName = `yt_${Date.now()}.mp3`;
+        // Download YouTube video (not just audio)
+        const fileName = `yt_${Date.now()}.mp4`;
         const filePath = path.join(MEDIA_DIR, fileName);
         
-        await downloadYoutubeAudio(youtubeUrl, filePath);
+        await downloadYoutubeVideo(youtubeUrl, filePath);
         
         await modalInteraction.editReply('downloaded file, normalizing volume... this might take a sec (￣ー￣)ゞ');
         
@@ -119,7 +134,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           }
           
           // analyze volume and create normalized file
-          const normalizedFileName = `norm_yt_${Date.now()}.mp3`;
+          const normalizedFileName = `norm_yt_${Date.now()}.mp4`;
           const normalizedPath = path.join(normalizedDir, normalizedFileName);
           
           // normalize with ffmpeg
@@ -153,9 +168,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
                   const targetVolume = -3; // target peak volume in dB
                   const adjustment = targetVolume - maxVolume;
                   
-                  // now normalize with the calculated adjustment
+                  // now normalize with the calculated adjustment while preserving video
                   ffmpeg(filePath)
                     .audioFilters(`volume=${adjustment}dB`)
+                    .videoCodec('copy')  // Copy video stream without re-encoding
                     .output(normalizedPath)
                     .on('error', (err: any) => reject(new Error(`Normalization failed: ${err.message}`)))
                     .on('end', () => {
@@ -218,7 +234,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     
   } catch (error) {
     console.error('YouTube info error:', error);
-    await interaction.editReply('failed to get info from YouTube (╯°□°）╯︵ ┻━┻');
+    await interaction.editReply(`failed to process YouTube request: ${error.message} (╯°□°）╯︵ ┻━┻`);
   }
 }
 
@@ -231,20 +247,30 @@ async function getYoutubeVideoInfo(url: string): Promise<{ title: string }> {
     return { title: info.title };
   } catch (error) {
     console.error('Error getting YouTube info:', error);
-    return { title: '' };
+    // Check if the error is due to missing yt-dlp
+    if ((error as any).message?.includes('command not found')) {
+      throw new Error('yt-dlp is not installed. Please install it first.');
+    }
+    throw new Error(`Failed to get video info: ${error.message}`);
   }
 }
 
-async function downloadYoutubeAudio(url: string, outputPath: string): Promise<void> {
+async function downloadYoutubeVideo(url: string, outputPath: string): Promise<void> {
   try {
-    // Download audio only, convert to mp3, and limit duration to 5 minutes
+    // Download video with audio, limit duration to 10 minutes and file size to 20MB
     await execPromise(
-      `yt-dlp -x --audio-format mp3 --audio-quality 0 ` +
-      `--max-filesize 15m --match-filter "duration < 600" ` +
+      `yt-dlp -f "bestvideo[height<=720]+bestaudio/best[height<=720]" ` +
+      `--max-filesize 20m --match-filter "duration < 600" ` +
       `-o "${outputPath}" "${url}"`
     );
   } catch (error) {
-    console.error('Error downloading YouTube audio:', error);
-    throw new Error(`Failed to download: ${error}`);
+    console.error('Error downloading YouTube video:', error);
+    // Check if the error is related to video duration or file size
+    if ((error as any).message?.includes('exceeds --max-filesize')) {
+      throw new Error('Video exceeds maximum file size limit (20MB)');
+    } else if ((error as any).message?.includes('does not pass filter')) {
+      throw new Error('Video exceeds maximum duration limit (10 minutes)');
+    }
+    throw new Error(`Failed to download: ${error.message}`);
   }
 }
