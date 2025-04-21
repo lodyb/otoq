@@ -17,6 +17,11 @@ export const data = new SlashCommandBuilder()
     option.setName('title')
       .setDescription('title to search for')
       .setRequired(false)
+  )
+  .addBooleanOption(option => 
+    option.setName('clip')
+      .setDescription('play a random 30s clip instead of full track')
+      .setRequired(false)
   );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -26,6 +31,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const audioPlayer = AudioPlayerManager.getInstance();
   
   const title = interaction.options.getString('title');
+  const clipMode = interaction.options.getBoolean('clip') || false;
   
   const member = interaction.member as GuildMember;
   if (!member.voice.channel) {
@@ -62,7 +68,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
   
-  const played = await audioPlayer.playMedia(interaction.guildId!, media);
+  const played = await audioPlayer.playMedia(interaction.guildId!, media, clipMode);
   if (!played) {
     await interaction.editReply('failed to play media (╬ಠ益ಠ)');
     audioPlayer.leaveChannel(interaction.guildId!);
@@ -72,7 +78,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const embed = new EmbedBuilder()
     .setColor(0x0099FF)
     .setTitle('playing media')
-    .setDescription(`now playing: **${media.title}**`);
+    .setDescription(`now playing: **${media.title}**${clipMode ? ' (clip mode)' : ''}`);
   
   await interaction.editReply({ embeds: [embed] });
   

@@ -139,7 +139,8 @@ export class DatabaseManager {
       }
     }
     
-    const extraLimit = Math.min(limit * 2, limit + 50);
+    // get more than we need to have room for filtering out recent items
+    const extraLimit = Math.min(limit * 3, limit + 100);
     query += ' ORDER BY RANDOM() LIMIT ?';
     params.push(extraLimit);
 
@@ -155,24 +156,41 @@ export class DatabaseManager {
             };
           });
           
+          // better filtering to avoid repetition - strict blacklist
           const filteredRows = typedRows.filter(row => !this.recentlyUsedMediaIds.has(row.id));
           
-          if (filteredRows.length < limit && typedRows.length >= limit) {
+          // if we don't have enough media after filtering, add some back
+          if (filteredRows.length < limit && typedRows.length > filteredRows.length) {
+            // how many more do we need
             const remainingNeeded = limit - filteredRows.length;
+            
+            // get the recently used items we filtered out
             const recentlyUsedRows = typedRows.filter(row => this.recentlyUsedMediaIds.has(row.id));
-            filteredRows.push(...recentlyUsedRows.slice(0, remainingNeeded));
+            
+            // sort them by how long ago they were used (older ones first)
+            // (we don't track this yet, so just shuffle randomly for now)
+            const shuffledRecent = this.shuffleArray([...recentlyUsedRows]);
+            
+            // add back only as many as needed
+            filteredRows.push(...shuffledRecent.slice(0, remainingNeeded));
           }
           
-          const shuffled = this.shuffleArray(filteredRows);
+          // shuffle before returning
+          const result = this.shuffleArray(filteredRows).slice(0, limit);
           
-          shuffled.forEach(row => this.recentlyUsedMediaIds.add(row.id));
+          // track newly used items
+          result.forEach(row => this.recentlyUsedMediaIds.add(row.id));
           
-          if (this.recentlyUsedMediaIds.size > 100) {
+          // limit the size of the tracked set to prevent memory issues
+          if (this.recentlyUsedMediaIds.size > 200) {
+            // keep only the 100 most recent
             const idsArray = Array.from(this.recentlyUsedMediaIds);
-            this.recentlyUsedMediaIds = new Set(idsArray.slice(idsArray.length - 50));
+            this.recentlyUsedMediaIds = new Set(idsArray.slice(idsArray.length - 100));
           }
           
-          resolve(shuffled.slice(0, limit));
+          console.log(`media selection: ${result.length} items with ${this.recentlyUsedMediaIds.size} in blacklist`);
+          
+          resolve(result);
         }
       });
     });

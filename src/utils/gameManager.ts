@@ -8,6 +8,8 @@ export class GameManager {
   private sessions: Map<string, GameSession>;
   private db: DatabaseManager;
   private skipVotesInProgress: Map<string, boolean>;
+  private roundTransitionInProgress: Map<string, boolean> = new Map();
+  private ROUND_TRANSITION_DELAY = 3000; // 3 second delay between rounds
   
   private constructor() {
     this.sessions = new Map();
@@ -36,7 +38,8 @@ export class GameManager {
     tags?: string[],
     yearStart?: number,
     yearEnd?: number,
-    channel?: TextChannel | ThreadChannel
+    channel?: TextChannel | ThreadChannel,
+    clipMode: boolean = false
   ): Promise<GameSession | null> {
     const key = this.getSessionKey(guildId, channelId, channel);
     
@@ -66,7 +69,7 @@ export class GameManager {
     
     // create session in db
     const sessionId = await this.db.createGameSession(guildId, channelId, rounds);
-    const session = new GameSession(sessionId, guildId, channelId, finalPlaylist, rounds);
+    const session = new GameSession(sessionId, guildId, channelId, finalPlaylist, rounds, clipMode);
     
     this.sessions.set(key, session);
     return session;
@@ -111,6 +114,14 @@ export class GameManager {
     
     if (!session) return false;
     
+    // prevent multiple simultaneous round advances
+    if (this.roundTransitionInProgress.get(key)) {
+      console.log(`round transition already in progress for ${key}`);
+      return false;
+    }
+    
+    this.roundTransitionInProgress.set(key, true);
+    
     // handle correct guess case  
     if (userId && username) {
       session.addPlayer(userId, username);
@@ -133,18 +144,29 @@ export class GameManager {
     
     // check if last round
     if (session.isLastRound()) {
+      this.roundTransitionInProgress.set(key, false);
       return false;
     }
     
     // get next media
     const nextMedia = session.nextRound();
     if (!nextMedia) {
+      this.roundTransitionInProgress.set(key, false);
       return false;
     }
     
-    // play it
-    const audioPlayer = AudioPlayerManager.getInstance();
-    return await audioPlayer.playMedia(guildId, nextMedia);
+    // introduce a delay between rounds
+    console.log(`waiting ${this.ROUND_TRANSITION_DELAY}ms before starting next round`);
+    return new Promise((resolve) => {
+      setTimeout(async () => {
+        // play it
+        const audioPlayer = AudioPlayerManager.getInstance();
+        const success = await audioPlayer.playMedia(guildId, nextMedia, session.isClipMode());
+        
+        this.roundTransitionInProgress.set(key, false);
+        resolve(success);
+      }, this.ROUND_TRANSITION_DELAY);
+    });
   }
   
   public async processGuess(guildId: string, channelId: string, userId: string, username: string, guess: string, channel?: TextChannel | ThreadChannel): Promise<{correct: boolean, close: boolean}> {
@@ -216,6 +238,11 @@ export class GameManager {
       
       // update db
       await this.db.updateGameSession(session.getId(), session.getCurrentRound());
+      
+      // wait before continuing to avoid race conditions
+      if (this.ROUND_TRANSITION_DELAY > 0) {
+        await new Promise(resolve => setTimeout(resolve, this.ROUND_TRANSITION_DELAY));
+      }
       
       this.skipVotesInProgress.set(key, false);
       return {skipped: true, votes, required: requiredVotes};

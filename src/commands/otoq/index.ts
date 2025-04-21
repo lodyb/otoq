@@ -39,6 +39,11 @@ export const data = new SlashCommandBuilder()
     option.setName('year-end')
       .setDescription('end year for filtering')
       .setRequired(false)
+  )
+  .addBooleanOption(option =>
+    option.setName('clip')
+      .setDescription('play random 30s clips instead of full tracks')
+      .setRequired(false)
   );
 
 // hint generation
@@ -100,6 +105,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const tags = tagsOption ? tagsOption.toLowerCase().split(',').map(t => t.trim()) : undefined;
   const yearStart = interaction.options.getInteger('year-start');
   const yearEnd = interaction.options.getInteger('year-end');
+  const clipMode = interaction.options.getBoolean('clip') || false;
   
   // create session
   const newSession = await gameManager.createSession(
@@ -109,7 +115,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     tags,
     yearStart || undefined,
     yearEnd || undefined,
-    textChannel
+    textChannel,
+    clipMode
   );
   
   if (!newSession) {
@@ -238,7 +245,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
   
-  const success = await audioPlayer.playMedia(interaction.guildId!, media);
+  const success = await audioPlayer.playMedia(interaction.guildId!, media, clipMode);
   if (!success) {
     await interaction.editReply('couldnt play audio (ノಠ益ಠ)ノ彡┻━┻');
     await gameManager.endSession(interaction.guildId!, textChannel.id, textChannel);
@@ -260,6 +267,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   
   if (yearStart || yearEnd) {
     embed.addFields({ name: 'years', value: `${yearStart || 'any'} - ${yearEnd || 'any'}` });
+  }
+  
+  if (clipMode) {
+    embed.addFields({ name: 'mode', value: 'playing random 30s clips' });
   }
   
   // send public game message

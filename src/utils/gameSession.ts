@@ -19,8 +19,9 @@ export class GameSession {
   private currentRound: number;
   private totalRounds: number;
   private guessedAnswers: Set<number>; // track which media ids have been guessed
+  private clipMode: boolean;
 
-  constructor(id: number, guildId: string, channelId: string, playlist: MediaItem[], totalRounds: number) {
+  constructor(id: number, guildId: string, channelId: string, playlist: MediaItem[], totalRounds: number, clipMode: boolean = false) {
     this.id = id;
     this.guildId = guildId;
     this.channelId = channelId;
@@ -30,6 +31,7 @@ export class GameSession {
     this.currentRound = 0; // will increment to 1 on first nextRound() call
     this.totalRounds = totalRounds;
     this.guessedAnswers = new Set();
+    this.clipMode = clipMode;
   }
 
   public getId(): number {
@@ -122,5 +124,9 @@ export class GameSession {
 
   public resetSkipVotes(): void {
     this.skipVotes.clear();
+  }
+
+  public isClipMode(): boolean {
+    return this.clipMode;
   }
 }

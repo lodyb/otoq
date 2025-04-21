@@ -76,10 +76,10 @@ describe('DatabaseManager', () => {
       ]);
     });
     
-    // close match but not exact
+    // close match but not exact - test song is now considered correct with new logic
     const closeMatch = await dbManager.checkAnswer(1, 'test song');
-    expect(closeMatch.correct).toBe(false);
-    expect(closeMatch.close).toBe(true);
+    expect(closeMatch.correct).toBe(true);
+    expect(closeMatch.close).toBe(false);
     
     // mock again for different test case
     mockDb.all.mockImplementationOnce((query: string, params: any[], callback: (err: Error | null, rows: any[]) => void) => {

@@ -33,6 +33,10 @@ export class AudioPlayerManager {
   private hintTimers: Map<string, NodeJS.Timeout[]>;
   private timeoutTimer: Map<string, NodeJS.Timeout>;
   
+  // debounce protection
+  private endCallbackDebounce: Map<string, boolean> = new Map();
+  private playbackStartTime: Map<string, number> = new Map();
+  
   // constants
   private TARGET_VOLUME = -3; // target peak volume in dB
   private VOLUME_CACHE_FILE = path.join(process.cwd(), 'volume_cache.json');
@@ -41,6 +45,8 @@ export class AudioPlayerManager {
   private HINT_START_TIME = 20000; // first hint at 20s
   private HINT_INTERVAL = 10000; // hints every 10s
   private EXTRA_TIME = 5000; // extra time for short clips
+  private MIN_PLAYBACK_TIME = 3000; // minimum 3s before allowing round to end
+  private DEBOUNCE_TIME = 2000; // 2s debounce for end callback
   
   private initialize(): void {
     // override for tests to skip long operations
@@ -160,11 +166,13 @@ export class AudioPlayerManager {
     this.players.delete(guildId);
     this.isPlaying.delete(guildId);
     this.currentMedia.delete(guildId);
+    this.endCallbackDebounce.delete(guildId);
+    this.playbackStartTime.delete(guildId);
     
     return true;
   }
   
-  public async playMedia(guildId: string, media: MediaItem): Promise<boolean> {
+  public async playMedia(guildId: string, media: MediaItem, clipMode: boolean = false): Promise<boolean> {
     const player = this.players.get(guildId);
     if (!player) return false;
     
@@ -193,17 +201,29 @@ export class AudioPlayerManager {
       this.currentMedia.set(guildId, media);
       this.isPlaying.set(guildId, true);
       
-      // use normalized path if available, otherwise normalize on the fly
+      // reset debounce protection
+      this.endCallbackDebounce.set(guildId, false);
+      
+      // track playback start time
+      this.playbackStartTime.set(guildId, Date.now());
+      
+      // get file to play - full track or clip
       let filePath: string;
-      if (media.normalized_path && fs.existsSync(media.normalized_path)) {
-        // use pre-normalized file
-        console.log(`using pre-normalized file for media #${media.id}`);
-        filePath = media.normalized_path;
+      
+      if (clipMode) {
+        // create a 30s clip from a random position
+        try {
+          filePath = await this.createRandomClip(media.file_path);
+          this.trackTempFile(guildId, filePath);
+          console.log(`created random clip for media #${media.id}`);
+        } catch (err) {
+          console.error(`failed to create random clip, using full track: ${err}`);
+          filePath = await this.getNormalizedPath(media);
+          this.trackTempFile(guildId, filePath);
+        }
       } else {
-        // normalize volume on-the-fly (legacy support)
-        console.log(`normalizing media #${media.id} on-the-fly`);
-        const volAdjustment = await this.getVolumeAdjustment(media.id, media.file_path);
-        filePath = await this.createNormalizedFile(media.file_path, volAdjustment);
+        // use full track
+        filePath = await this.getNormalizedPath(media);
         this.trackTempFile(guildId, filePath);
       }
       
@@ -226,7 +246,7 @@ export class AudioPlayerManager {
       
       this.timeoutTimer.set(guildId, timeoutTimer);
       
-      console.log(`playing media #${media.id} (${duration}ms)`);
+      console.log(`playing media #${media.id} (${duration}ms) ${clipMode ? 'clip mode' : 'full track'}`);
       return true;
     } catch (err) {
       console.error(`failed to play media #${media.id}: ${err}`);
@@ -235,6 +255,73 @@ export class AudioPlayerManager {
       this.currentMedia.delete(guildId);
       return false;
     }
+  }
+  
+  private async getNormalizedPath(media: MediaItem): Promise<string> {
+    if (media.normalized_path && fs.existsSync(media.normalized_path)) {
+      // use pre-normalized file
+      console.log(`using pre-normalized file for media #${media.id}`);
+      return media.normalized_path;
+    } else {
+      // normalize volume on-the-fly (legacy support)
+      console.log(`normalizing media #${media.id} on-the-fly`);
+      const volAdjustment = await this.getVolumeAdjustment(media.id, media.file_path);
+      return await this.createNormalizedFile(media.file_path, volAdjustment);
+    }
+  }
+  
+  private async createRandomClip(filePath: string): Promise<string> {
+    // get file duration
+    const duration = await new Promise<number>((resolve, reject) => {
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        const durationSecs = metadata?.format?.duration || 0;
+        resolve(Math.floor(durationSecs));
+      });
+    });
+    
+    // clip specs
+    const CLIP_LENGTH = 30; // 30 seconds
+    const maxStartTime = Math.max(0, duration - CLIP_LENGTH - 5); // leave 5 sec safety margin
+    
+    if (maxStartTime <= 0) {
+      // file too short, return original
+      return filePath;
+    }
+    
+    // pick random start time
+    const startTime = Math.floor(Math.random() * maxStartTime);
+    console.log(`creating clip from ${startTime}s to ${startTime + CLIP_LENGTH}s`);
+    
+    // create temp file
+    const ext = path.extname(filePath);
+    const tempFile = path.join(process.cwd(), 'temp', `clip_${Date.now()}${ext}`);
+    
+    // ensure temp dir exists
+    const tempDir = path.dirname(tempFile);
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    
+    // create clip
+    return new Promise((resolve, reject) => {
+      ffmpeg(filePath)
+        .seekInput(startTime)
+        .duration(CLIP_LENGTH)
+        .output(tempFile)
+        .on('error', (err) => {
+          console.error(`clip creation error: ${err}`);
+          reject(err);
+        })
+        .on('end', () => {
+          resolve(tempFile);
+        })
+        .run();
+    });
   }
   
   public stopPlaying(guildId: string): void {
@@ -250,6 +337,15 @@ export class AudioPlayerManager {
   public handlePlaybackEnd(guildId: string): void {
     const mediaItem = this.currentMedia.get(guildId);
     if (!mediaItem || !this.isPlaying.get(guildId)) return;
+    
+    // check for minimum playback time
+    const startTime = this.playbackStartTime.get(guildId) || 0;
+    const playbackDuration = Date.now() - startTime;
+    
+    if (playbackDuration < this.MIN_PLAYBACK_TIME) {
+      console.log(`ignoring premature playback end after only ${playbackDuration}ms`);
+      return;
+    }
     
     this.isPlaying.set(guildId, false);
     
@@ -281,43 +377,29 @@ export class AudioPlayerManager {
   
   // alias for tests
   public handleAudioEnd(guildId: string): void {
-    const mediaItem = this.currentMedia.get(guildId);
-    if (!mediaItem || !this.isPlaying.get(guildId)) return;
-    
-    this.isPlaying.set(guildId, false);
-    
-    // short clip handling
-    const duration = this.mediaDurations.get(mediaItem.id) || 0;
-    const isShortClip = duration <= this.SHORT_CLIP_THRESHOLD;
-    
-    if (isShortClip) {
-      // show hint for very short clips
-      if (duration < this.HINT_START_TIME) {
-        const hintCallback = this.onHintCallbacks.get(guildId);
-        if (hintCallback) {
-          console.log(`showing hint for short clip #${mediaItem.id}`);
-          hintCallback(mediaItem, 0);
-        }
-      }
-      
-      // add extra time for short clips
-      console.log(`waiting ${this.EXTRA_TIME}ms extra for short clip`);
-      setTimeout(() => {
-        this.triggerEndCallback(guildId);
-      }, this.EXTRA_TIME);
-    } else {
-      this.triggerEndCallback(guildId);
-    }
-    
-    this.clearTimers(guildId);
+    this.handlePlaybackEnd(guildId);
   }
   
   // made public for tests only
   public triggerEndCallback(guildId: string): void {
+    // debounce protection - prevent multiple triggers in quick succession
+    if (this.endCallbackDebounce.get(guildId)) {
+      console.log(`ignoring duplicate end callback for guild ${guildId}`);
+      return;
+    }
+    
+    // set debounce lock
+    this.endCallbackDebounce.set(guildId, true);
+    
     const callback = this.onEndCallbacks.get(guildId);
     if (callback) {
       callback();
     }
+    
+    // release debounce after timeout
+    setTimeout(() => {
+      this.endCallbackDebounce.set(guildId, false);
+    }, this.DEBOUNCE_TIME);
   }
   
   public hasConnection(guildId: string): boolean {
@@ -612,6 +694,7 @@ export class AudioPlayerManager {
             reject(err);
             return;
           }
+          
           resolve((metadata?.format?.duration || 0) * 1000);
         });
       });
