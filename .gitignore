@@ -1,0 +1,40 @@
+# node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+src/media
+.env
+data.db
+
+# editor/os
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# logs
+*.log
+logs/
+log/
+
+# temp files
+/temp
+/tmp
+*.tmp
+
+# built files
+.phpunit.result.cache
+public/storage
+public/hot
+public/build
+/dist
+
+# misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+volume_cache.json
