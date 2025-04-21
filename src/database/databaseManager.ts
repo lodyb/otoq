@@ -4,7 +4,6 @@ import path from 'path';
 export class DatabaseManager {
   private db: sqlite3.Database;
   private static instance: DatabaseManager;
-  private recentlyUsedMediaIds: Set<number> = new Set();
 
   private constructor() {
     this.db = new sqlite3.Database(path.join(process.cwd(), 'data.db'));
@@ -139,10 +138,9 @@ export class DatabaseManager {
       }
     }
     
-    // get more than we need to have room for filtering out recent items
-    const extraLimit = Math.min(limit * 3, limit + 100);
+    // get exactly what we need - no filtering
     query += ' ORDER BY RANDOM() LIMIT ?';
-    params.push(extraLimit);
+    params.push(limit);
 
     return new Promise((resolve, reject) => {
       this.db.all(query, params, (err, rows: any[]) => {
@@ -156,39 +154,10 @@ export class DatabaseManager {
             };
           });
           
-          // better filtering to avoid repetition - strict blacklist
-          const filteredRows = typedRows.filter(row => !this.recentlyUsedMediaIds.has(row.id));
+          // shuffle once more for good measure
+          const result = this.shuffleArray(typedRows);
           
-          // if we don't have enough media after filtering, add some back
-          if (filteredRows.length < limit && typedRows.length > filteredRows.length) {
-            // how many more do we need
-            const remainingNeeded = limit - filteredRows.length;
-            
-            // get the recently used items we filtered out
-            const recentlyUsedRows = typedRows.filter(row => this.recentlyUsedMediaIds.has(row.id));
-            
-            // sort them by how long ago they were used (older ones first)
-            // (we don't track this yet, so just shuffle randomly for now)
-            const shuffledRecent = this.shuffleArray([...recentlyUsedRows]);
-            
-            // add back only as many as needed
-            filteredRows.push(...shuffledRecent.slice(0, remainingNeeded));
-          }
-          
-          // shuffle before returning
-          const result = this.shuffleArray(filteredRows).slice(0, limit);
-          
-          // track newly used items
-          result.forEach(row => this.recentlyUsedMediaIds.add(row.id));
-          
-          // limit the size of the tracked set to prevent memory issues
-          if (this.recentlyUsedMediaIds.size > 200) {
-            // keep only the 100 most recent
-            const idsArray = Array.from(this.recentlyUsedMediaIds);
-            this.recentlyUsedMediaIds = new Set(idsArray.slice(idsArray.length - 100));
-          }
-          
-          console.log(`media selection: ${result.length} items with ${this.recentlyUsedMediaIds.size} in blacklist`);
+          console.log(`media selection: ${result.length} items`);
           
           resolve(result);
         }

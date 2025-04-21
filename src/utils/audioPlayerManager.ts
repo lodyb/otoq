@@ -185,16 +185,11 @@ export class AudioPlayerManager {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    // validate media
-    if (this.corruptedMedia.has(media.id)) {
-      console.log(`media #${media.id} is marked as corrupted, skipping`)
-      return false;
-    }
-    
+    // no corruption checks - simplify
+
     // check file exists
     if (!fs.existsSync(media.file_path)) {
       console.error(`file not found: ${media.file_path}`);
-      this.corruptedMedia.add(media.id);
       return false;
     }
     
@@ -212,32 +207,12 @@ export class AudioPlayerManager {
       // track playback start time
       this.playbackStartTime.set(guildId, Date.now());
       
-      // get file to play - full track or clip
-      let filePath: string;
-      
-      if (clipMode) {
-        // create a 30s clip from a random position
-        try {
-          filePath = await this.createRandomClip(media.file_path);
-          this.trackTempFile(guildId, filePath);
-          console.log(`created random clip for media #${media.id}`);
-        } catch (err) {
-          console.error(`failed to create random clip, using full track: ${err}`);
-          filePath = await this.getNormalizedPath(media);
-          this.trackTempFile(guildId, filePath);
-        }
-      } else {
-        // use full track
-        filePath = await this.getNormalizedPath(media);
-        this.trackTempFile(guildId, filePath);
-      }
-      
-      // get duration
-      const duration = await this.getMediaDuration(media.id, media.file_path);
-      
-      // play file
-      const resource = createAudioResource(filePath);
+      // play directly without normalization
+      const resource = createAudioResource(media.file_path);
       player.play(resource);
+      
+      // get duration for hint system
+      const duration = await this.getMediaDuration(media.id, media.file_path);
       
       // set up hint timers
       this.setupHintTimers(guildId, media, duration);
@@ -251,11 +226,10 @@ export class AudioPlayerManager {
       
       this.timeoutTimer.set(guildId, timeoutTimer);
       
-      console.log(`playing media #${media.id} (${duration}ms) ${clipMode ? 'clip mode' : 'full track'}`);
+      console.log(`playing media #${media.id} (${duration}ms) direct mode`);
       return true;
     } catch (err) {
       console.error(`failed to play media #${media.id}: ${err}`);
-      this.corruptedMedia.add(media.id);
       this.isPlaying.set(guildId, false);
       this.currentMedia.delete(guildId);
       return false;

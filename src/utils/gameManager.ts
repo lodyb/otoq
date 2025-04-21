@@ -51,10 +51,36 @@ export class GameManager {
     // reset corrupted media
     AudioPlayerManager.getInstance().resetCorruptedMediaList();
     
-    // get random media
-    const playlist = await this.db.getRandomMedia(tags, yearStart, yearEnd, rounds * 2);
-    if (playlist.length === 0) {
-      return null;
+    // request 2x the tracks to make sure we have enough
+    const maxAttempts = 3; // try up to 3 times
+    let playlist: MediaItem[] = [];
+    
+    // loop until we have enough tracks or max attempts reached
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // get random media
+      playlist = await this.db.getRandomMedia(tags, yearStart, yearEnd, rounds * 2);
+      
+      // if we got enough, break out
+      if (playlist.length >= rounds) {
+        console.log(`got ${playlist.length} tracks on attempt ${attempt+1}`);
+        break;
+      }
+      
+      console.log(`not enough tracks (${playlist.length}/${rounds}) on attempt ${attempt+1}, trying again`);
+    }
+    
+    // still not enough tracks
+    if (playlist.length < rounds) {
+      console.log(`couldn't get enough tracks after ${maxAttempts} attempts (╯°□°）╯︵ ┻━┻`);
+      
+      // use what we have if at least 5 tracks
+      if (playlist.length < 5) {
+        return null;
+      }
+      
+      // adjust rounds to match what we have
+      rounds = playlist.length;
+      console.log(`adjusted rounds to ${rounds} to match available tracks`);
     }
     
     // randomize for production, sort for tests
@@ -66,6 +92,7 @@ export class GameManager {
     
     // take only what we need
     const finalPlaylist = playlist.slice(0, rounds);
+    console.log(`final playlist length: ${finalPlaylist.length}`);
     
     // create session in db
     const sessionId = await this.db.createGameSession(guildId, channelId, rounds);
