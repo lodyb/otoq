@@ -72,15 +72,25 @@ export class GameSession {
     this.currentRound++;
     
     // check if we've reached the end
-    if (this.currentRound > this.totalRounds || this.currentRound > this.playlist.length) {
+    // game ends only when we exceed BOTH totalRounds AND playlist length
+    if (this.currentRound > this.totalRounds) {
+      console.log(`nextRound: ending game because currentRound (${this.currentRound}) > totalRounds (${this.totalRounds})`);
+      return undefined;
+    }
+    
+    // also end if we've reached the end of the playlist
+    if (this.currentRound > this.playlist.length) {
+      console.log(`nextRound: ending game because currentRound (${this.currentRound}) > playlist length (${this.playlist.length})`);
       return undefined;
     }
     
     return this.getCurrentMedia();
   }
-
+  
   public isLastRound(): boolean {
-    return this.currentRound >= this.totalRounds || this.currentRound >= this.playlist.length;
+    // check if THIS is the last round (not already past it)
+    return this.currentRound === this.totalRounds || 
+           (this.currentRound > 0 && this.currentRound === this.playlist.length);
   }
 
   public addPlayer(userId: string, username: string): void {

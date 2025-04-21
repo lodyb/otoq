@@ -169,21 +169,22 @@ export class GameManager {
     // update db
     await this.db.updateGameSession(session.getId(), session.getCurrentRound());
     
-    // check if last round
+    // check if last round using the fixed isLastRound method
     if (session.isLastRound()) {
-      this.roundTransitionInProgress.set(key, false);
-      return false;
+      console.log(`advanceRound: this is the last round (${session.getCurrentRound()} of ${session.getTotalRounds()})`);
     }
     
-    // get next media
+    // get next media - this also advances the round counter
     const nextMedia = session.nextRound();
+    
     if (!nextMedia) {
+      console.log(`advanceRound: no next media available, ending game after round ${session.getCurrentRound()-1}`);
       this.roundTransitionInProgress.set(key, false);
       return false;
     }
     
     // introduce a delay between rounds
-    console.log(`waiting ${this.ROUND_TRANSITION_DELAY}ms before starting next round`);
+    console.log(`waiting ${this.ROUND_TRANSITION_DELAY}ms before starting next round ${session.getCurrentRound()}`);
     return new Promise((resolve) => {
       setTimeout(async () => {
         try {
