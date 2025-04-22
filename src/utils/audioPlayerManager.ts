@@ -10,6 +10,7 @@ import {
 } from '@discordjs/voice';
 import { VoiceChannel } from 'discord.js';
 import { MediaItem } from './gameSession';
+import { MediaProcessor } from './mediaProcessor';
 import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
@@ -185,8 +186,6 @@ export class AudioPlayerManager {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    // no corruption checks - simplify
-
     // check file exists
     if (!fs.existsSync(media.file_path)) {
       console.error(`file not found: ${media.file_path}`);
@@ -207,8 +206,11 @@ export class AudioPlayerManager {
       // track playback start time
       this.playbackStartTime.set(guildId, Date.now());
       
-      // play directly without normalization
-      const resource = createAudioResource(media.file_path);
+      // get normalized file path - prefer pre-normalized if available
+      const filePath = await this.getNormalizedPath(media);
+      this.trackTempFile(guildId, filePath);
+      
+      const resource = createAudioResource(filePath);
       player.play(resource);
       
       // get duration for hint system
@@ -226,7 +228,7 @@ export class AudioPlayerManager {
       
       this.timeoutTimer.set(guildId, timeoutTimer);
       
-      console.log(`playing media #${media.id} (${duration}ms) direct mode`);
+      console.log(`playing media #${media.id} (${duration}ms) ${media.normalized_path ? 'using pre-normalized file' : 'using on-the-fly normalization'}`);
       return true;
     } catch (err) {
       console.error(`failed to play media #${media.id}: ${err}`);
@@ -244,8 +246,21 @@ export class AudioPlayerManager {
     } else {
       // normalize volume on-the-fly (legacy support)
       console.log(`normalizing media #${media.id} on-the-fly`);
-      const volAdjustment = await this.getVolumeAdjustment(media.id, media.file_path);
-      return await this.createNormalizedFile(media.file_path, volAdjustment);
+      
+      try {
+        const mediaProcessor = MediaProcessor.getInstance();
+        const normalizedDir = path.join(process.cwd(), 'temp');
+        
+        const result = await mediaProcessor.normalizeAndConvert(media.file_path, normalizedDir);
+        this.storeMediaDuration(media.id, result.duration);
+        
+        return result.outputPath;
+      } catch (err) {
+        console.error(`failed to normalize: ${err}`);
+        
+        // fallback to original file
+        return media.file_path;
+      }
     }
   }
   

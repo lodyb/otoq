@@ -7,6 +7,8 @@ audio quiz bot for discord servers! listen to clips and guess what they are.
 - start game with `/otoq` (options for rounds, tags, years)
 - vote to skip with `/otoqskip`
 - upload new media with `/otoqupload`
+- automatic volume normalization (replaygain)
+- automatic conversion of webm/mkv/m4a to mp4 for discord
 - scores and leaderboards
 - filtering by tags and years
 
@@ -73,3 +75,35 @@ pm2 start dist/index.js --name otoq
 pm2 startup
 pm2 save
 ```
+
+## media utilities
+
+### volume normalization and format conversion
+
+to normalize the volume of all media files in your database and convert any webm/mkv/m4a files to mp4:
+
+```
+npm run normalize
+```
+
+or to force re-processing of all files (even already normalized ones):
+
+```
+npm run normalize -- --force
+```
+
+this will:
+- normalize audio volume to a consistent level
+- convert webm/mkv/m4a files to mp4 format (compatible with discord embeds)
+- update the database with the new file paths
+- store the duration of each media file
+
+### migration
+
+if you're upgrading from an older version:
+
+```
+npm run migrate
+```
+
+this will add any necessary database columns and normalize your media files.

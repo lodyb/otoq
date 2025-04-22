@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit",
     "cleanup": "ts-node scripts/cleanup.ts",
     "migrate": "ts-node migrate.ts",
-    "scheduler": "ts-node scripts/scheduler.ts"
+    "scheduler": "ts-node scripts/scheduler.ts",
+    "normalize": "ts-node scripts/normalize-media.ts"
   },
   "keywords": [
     "discord",

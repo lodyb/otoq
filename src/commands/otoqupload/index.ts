@@ -10,6 +10,7 @@ import {
 } from 'discord.js';
 import { DatabaseManager } from '../../database/databaseManager';
 import { AudioPlayerManager } from '../../utils/audioPlayerManager';
+import { MediaProcessor } from '../../utils/mediaProcessor';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -99,102 +100,46 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     
     try {
       // Download file
-      const response = await fetch(attachment.url);
+      const response = await fetch(attachment.url)
       if (!response.ok) {
-        throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
+        throw new Error(`failed to download: ${response.status} ${response.statusText}`)
       }
       
-      const buffer = await response.arrayBuffer();
-      const fileName = `${Date.now()}_${attachment.name}`;
-      const filePath = path.join(MEDIA_DIR, fileName);
+      const buffer = await response.arrayBuffer()
+      const fileName = `${Date.now()}_${attachment.name}`
+      const filePath = path.join(MEDIA_DIR, fileName)
       
-      fs.writeFileSync(filePath, Buffer.from(buffer));
+      fs.writeFileSync(filePath, Buffer.from(buffer))
       
-      await modalInteraction.editReply('downloaded file, normalizing volume... this might take a sec (￣ー￣)ゞ');
+      await modalInteraction.editReply('downloaded file, normalizing volume and converting format if needed... this might take a sec (￣ー￣)ゞ')
       
-      // Normalize audio on upload
       try {
-        const audioPlayer = AudioPlayerManager.getInstance();
-        const normalizedDir = path.join(MEDIA_DIR, 'normalized');
-        
-        // ensure normalized directory exists
+        const normalizedDir = path.join(MEDIA_DIR, 'normalized')
         if (!fs.existsSync(normalizedDir)) {
-          fs.mkdirSync(normalizedDir, { recursive: true });
+          fs.mkdirSync(normalizedDir, { recursive: true })
         }
         
-        // analyze volume and create normalized file
-        const normalizedFileName = `norm_${Date.now()}_${attachment.name}`;
-        const normalizedPath = path.join(normalizedDir, normalizedFileName);
+        // process media file using our new utility
+        const mediaProcessor = MediaProcessor.getInstance()
+        const result = await mediaProcessor.normalizeAndConvert(filePath, normalizedDir)
         
-        // normalize with ffmpeg
-        await new Promise<void>((resolve, reject) => {
-          const ffmpeg = require('fluent-ffmpeg');
-          
-          // first analyze the volume
-          ffmpeg.ffprobe(filePath, (err: any, metadata: any) => {
-            if (err) {
-              reject(new Error(`Failed to analyze media: ${err.message}`));
-              return;
-            }
-            
-            // get duration in ms
-            const durationMs = Math.floor((metadata?.format?.duration || 0) * 1000);
-            
-            // analyze volume
-            ffmpeg(filePath)
-              .audioFilters('volumedetect')
-              .format('null')
-              .output('/dev/null')
-              .on('error', (err: any) => reject(new Error(`Volume analysis failed: ${err.message}`)))
-              .on('end', (stdout: any, stderr: any) => {
-                const match = stderr.match(/max_volume: ([-\d.]+) dB/);
-                if (!match || !match[1]) {
-                  reject(new Error('Could not detect volume level'));
-                  return;
-                }
-                
-                const maxVolume = parseFloat(match[1]);
-                const targetVolume = -3; // target peak volume in dB
-                const adjustment = targetVolume - maxVolume;
-                
-                // now normalize with the calculated adjustment
-                ffmpeg(filePath)
-                  .audioFilters(`volume=${adjustment}dB`)
-                  .output(normalizedPath)
-                  .on('error', (err: any) => reject(new Error(`Normalization failed: ${err.message}`)))
-                  .on('end', () => {
-                    // store the duration for future use
-                    audioPlayer.storeMediaDuration(1, durationMs); // temp ID, will update after DB insert
-                    resolve();
-                  })
-                  .run();
-              })
-              .run();
-          });
-        });
-      
         // Add to database
-        const db = DatabaseManager.getInstance();
-        const mediaId = await db.addMedia(title, filePath);
+        const db = DatabaseManager.getInstance()
+        const mediaId = await db.addMedia(title, filePath)
         
         // Update the normalized path in database
-        await db.updateNormalizedPath(mediaId, normalizedPath);
+        await db.updateNormalizedPath(mediaId, result.outputPath)
         
-        // Store the duration with correct ID
-        const duration = await new Promise<number>((resolve) => {
-          const ffmpeg = require('fluent-ffmpeg');
-          ffmpeg.ffprobe(filePath, (err: any, metadata: any) => {
-            resolve(Math.floor((metadata?.format?.duration || 0) * 1000));
-          });
-        });
-        audioPlayer.storeMediaDuration(mediaId, duration);
+        // Store the duration
+        const audioPlayer = AudioPlayerManager.getInstance()
+        audioPlayer.storeMediaDuration(mediaId, result.duration)
         
         // Add primary answer
-        await db.addPrimaryAnswer(mediaId, title);
+        await db.addPrimaryAnswer(mediaId, title)
         
         // Add alternative answers
         for (const alt of altAnswers) {
-          await db.addAlternativeAnswer(mediaId, alt);
+          await db.addAlternativeAnswer(mediaId, alt)
         }
         
         const embed = new EmbedBuilder()
@@ -203,12 +148,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           .setDescription(`added **${title}** (ID: ${mediaId}) to the quiz database`)
           .addFields(
             { name: 'alternative answers', value: altAnswers.length > 0 ? altAnswers.join(', ') : 'none' }
-          );
+          )
         
-        await modalInteraction.editReply({ embeds: [embed] });
+        await modalInteraction.editReply({ embeds: [embed] })
       } catch (error) {
-        console.error('Normalization error:', error);
-        await modalInteraction.editReply(`failed during normalization: ${error} (╯°□°）╯︵ ┻━┻`);
+        console.error('media processing error:', error)
+        await modalInteraction.editReply(`failed during processing: ${error} (╯°□°）╯︵ ┻━┻`)
       }
     } catch (error) {
       console.error('Upload error:', error);
@@ -220,7 +165,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 }
 
 function isValidMediaExtension(fileName: string): boolean {
-  const validExtensions = ['.mp3', '.mp4', '.m4a', '.wav', '.flac', '.mov', '.wmv', '.ogg'];
-  const extension = path.extname(fileName).toLowerCase();
-  return validExtensions.includes(extension);
+  const validExtensions = ['.mp3', '.mp4', '.m4a', '.wav', '.flac', '.mov', '.wmv', '.ogg', '.webm', '.mkv']
+  const extension = path.extname(fileName).toLowerCase()
+  return validExtensions.includes(extension)
 }

@@ -5,6 +5,7 @@ import fileUpload from 'express-fileupload';
 import cors from 'cors';
 import { DatabaseManager } from '../database/databaseManager';
 import { AudioPlayerManager } from '../utils/audioPlayerManager';
+import { MediaProcessor } from '../utils/mediaProcessor';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -85,67 +86,59 @@ app.get('/', (req: any, res: any) => {
 app.post('/upload', (req: any, res: any) => {
   try {
     if (!req.files || !req.files.media) {
-      return res.status(400).json({ error: 'no file uploaded (ノಠ益ಠ)ノ彡┻━┻' });
+      return res.status(400).json({ error: 'no file uploaded (ノಠ益ಠ)ノ彡┻━┻' })
     }
     
-    const mediaFile = req.files.media;
+    const mediaFile = req.files.media
     const answers = req.body.answers?.split(/[\n,]/)
                       .map((ans: string) => ans.trim())
-                      .filter((ans: string) => ans.length > 0) || [];
+                      .filter((ans: string) => ans.length > 0) || []
                       
     if (answers.length === 0) {
-      return res.status(400).json({ error: 'you need to provide at least one answer (￣ヘ￣)' });
+      return res.status(400).json({ error: 'you need to provide at least one answer (￣ヘ￣)' })
     }
     
     // move file to media directory
-    const fileName = `${Date.now()}_${mediaFile.name}`;
-    const filePath = path.join(MEDIA_DIR, fileName);
+    const fileName = `${Date.now()}_${mediaFile.name}`
+    const filePath = path.join(MEDIA_DIR, fileName)
     
     mediaFile.mv(filePath, async (err: any) => {
       if (err) {
-        console.error('file move error:', err);
-        return res.status(500).json({ error: 'failed to save file (╯°□°）╯︵ ┻━┻' });
+        console.error('file move error:', err)
+        return res.status(500).json({ error: 'failed to save file (╯°□°）╯︵ ┻━┻' })
       }
       
-      const title = answers[0];
-      const altAnswers = answers.slice(1);
+      const title = answers[0]
+      const altAnswers = answers.slice(1)
       
-      // normalize audio using existing logic
       try {
-        const audioPlayer = AudioPlayerManager.getInstance();
-        const normalizedDir = path.join(MEDIA_DIR, 'normalized');
-        
         // ensure normalized directory exists
+        const normalizedDir = path.join(MEDIA_DIR, 'normalized')
         if (!fs.existsSync(normalizedDir)) {
-          fs.mkdirSync(normalizedDir, { recursive: true });
+          fs.mkdirSync(normalizedDir, { recursive: true })
         }
         
-        // normalize with ffmpeg
-        const normalizedFileName = `norm_${Date.now()}_${mediaFile.name}`;
-        const normalizedPath = path.join(normalizedDir, normalizedFileName);
-        
-        // analyze and normalize volume
-        await normalizeAudio(filePath, normalizedPath);
-        
-        // get duration
-        const duration = await getMediaDuration(filePath);
+        // process the media using our new utility
+        const mediaProcessor = MediaProcessor.getInstance()
+        const result = await mediaProcessor.normalizeAndConvert(filePath, normalizedDir)
         
         // add to database
-        const db = DatabaseManager.getInstance();
-        const mediaId = await db.addMedia(title, filePath);
+        const db = DatabaseManager.getInstance()
+        const mediaId = await db.addMedia(title, filePath)
         
         // update normalized path in database
-        await db.updateNormalizedPath(mediaId, normalizedPath);
+        await db.updateNormalizedPath(mediaId, result.outputPath)
         
         // store duration
-        audioPlayer.storeMediaDuration(mediaId, duration);
+        const audioPlayer = AudioPlayerManager.getInstance()
+        audioPlayer.storeMediaDuration(mediaId, result.duration)
         
         // add primary answer
-        await db.addPrimaryAnswer(mediaId, title);
+        await db.addPrimaryAnswer(mediaId, title)
         
         // add alternative answers
         for (const alt of altAnswers) {
-          await db.addAlternativeAnswer(mediaId, alt);
+          await db.addAlternativeAnswer(mediaId, alt)
         }
         
         res.json({ 
@@ -153,85 +146,24 @@ app.post('/upload', (req: any, res: any) => {
           mediaId,
           title,
           message: `added ${title} (ID: ${mediaId}) to quiz db (⌐■_■)`
-        });
+        })
       } catch (error) {
         // cleanup file on error
         try {
-          fs.unlinkSync(filePath);
-        } catch (err) {}
+          fs.unlinkSync(filePath)
+        } catch (err) {
+          // ignore cleanup errors
+        }
         
-        console.error('normalization error:', error);
-        res.status(500).json({ error: `failed during normalization: ${error}` });
+        console.error('processing error:', error)
+        res.status(500).json({ error: `failed during processing: ${error}` })
       }
-    });
-  } catch (error) {
-    console.error('upload error:', error);
-    res.status(500).json({ error: 'failed to process upload (╯°□°）╯︵ ┻━┻' });
-  }
-});
-
-// helper function to normalize audio
-async function normalizeAudio(inputPath: string, outputPath: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg')
-    
-    // check for webm extension and fix common typo
-    if (outputPath.endsWith('.ebm')) {
-      outputPath = outputPath.replace('.ebm', '.webm')
-    }
-    
-    // first analyze the volume
-    ffmpeg.ffprobe(inputPath, (err: any, metadata: any) => {
-      if (err) {
-        reject(new Error(`failed to analyze media: ${err.message}`))
-        return
-      }
-      
-      // analyze volume
-      ffmpeg(inputPath)
-        .audioFilters('volumedetect')
-        .format('null')
-        .output('/dev/null')
-        .on('error', (err: any) => reject(new Error(`volume analysis failed: ${err.message}`)))
-        .on('end', (stdout: any, stderr: any) => {
-          const match = stderr.match(/max_volume: ([-\d.]+) dB/)
-          if (!match || !match[1]) {
-            reject(new Error('couldnt detect volume level'))
-            return
-          }
-          
-          const maxVolume = parseFloat(match[1])
-          const targetVolume = -3 // target peak volume in dB
-          const adjustment = targetVolume - maxVolume
-          
-          // normalize with the calculated adjustment
-          ffmpeg(inputPath)
-            .audioFilters(`volume=${adjustment}dB`)
-            .output(outputPath)
-            .on('error', (err: any) => reject(new Error(`normalization failed: ${err.message}`)))
-            .on('end', () => {
-              resolve()
-            })
-            .run()
-        })
-        .run()
     })
-  })
-}
-
-// helper function to get media duration
-async function getMediaDuration(filePath: string): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const ffmpeg = require('fluent-ffmpeg');
-    ffmpeg.ffprobe(filePath, (err: any, metadata: any) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(Math.floor((metadata?.format?.duration || 0) * 1000));
-    });
-  });
-}
+  } catch (error) {
+    console.error('upload error:', error)
+    res.status(500).json({ error: 'failed to process upload (╯°□°）╯︵ ┻━┻' })
+  }
+})
 
 // health check endpoint
 app.get('/health', (req: any, res: any) => {
