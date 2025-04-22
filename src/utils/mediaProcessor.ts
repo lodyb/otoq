@@ -189,10 +189,21 @@ export class MediaProcessor {
     let skipped = 0
     let errors: { id: number, error: string }[] = []
 
-    for (const media of mediaItems) {
+    const total = mediaItems.length
+    const progressInterval = 5 // report every 5 files
+    
+    for (let i = 0; i < mediaItems.length; i++) {
+      const media = mediaItems[i]
+      
       try {
+        // show progress
+        if (i % progressInterval === 0 || i === mediaItems.length - 1) {
+          console.log(`processing ${i+1}/${total}: media #${media.id} (${Math.floor((i+1)/total*100)}%)`)
+        }
+        
         // skip if file doesn't exist
         if (!fs.existsSync(media.file_path)) {
+          console.log(`  file not found: ${media.file_path}`)
           errors.push({ id: media.id, error: `file not found: ${media.file_path}` })
           continue
         }
@@ -204,7 +215,11 @@ export class MediaProcessor {
         // return full path for db update
         media.processed_path = result.outputPath
         media.duration = result.duration
+        
+        // show completion for this file
+        console.log(`  ✓ processed #${media.id} - duration: ${Math.floor(result.duration/1000)}s`)
       } catch (err: any) {
+        console.log(`  ✗ failed #${media.id}: ${err.message}`)
         errors.push({ id: media.id, error: err.message || 'unknown error' })
       }
     }
