@@ -52,6 +52,15 @@ async function isFileCorrupt(filePath: string): Promise<boolean> {
 // move corrupt file to corrupt dir and remove from db
 async function handleCorruptFile(dbManager: DatabaseManager, mediaId: number, filePath: string): Promise<void> {
   try {
+    // make sure file actually exists
+    if (!fs.existsSync(filePath)) {
+      // file is already gone, just remove from db
+      console.log(`file doesn't exist on disk: ${filePath}, removing from db only`)
+      await deleteMediaFromDb(dbManager, mediaId)
+      console.log(`corrupt file #${mediaId} removed from database`)
+      return
+    }
+    
     // create corrupt dir if it doesn't exist
     if (!fs.existsSync(CORRUPT_DIR)) {
       fs.mkdirSync(CORRUPT_DIR, { recursive: true })
