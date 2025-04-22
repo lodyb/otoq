@@ -8,6 +8,13 @@ import sqlite3 from 'sqlite3'
 
 dotenv.config()
 
+interface MediaItemToProcess {
+  id: number
+  file_path: string
+  processed_path?: string
+  duration?: number
+}
+
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(process.cwd(), 'src/media')
 const DB_PATH = path.join(process.cwd(), 'data.db')
 
@@ -64,7 +71,7 @@ async function migrate() {
   console.log('starting media processing migration...')
   
   // prepare media items for batch processing
-  const mediaToProcess = allMedia
+  const mediaToProcess: MediaItemToProcess[] = allMedia
     .filter(media => {
       // skip if already normalized
       if (media.normalized_path && fs.existsSync(media.normalized_path)) {
