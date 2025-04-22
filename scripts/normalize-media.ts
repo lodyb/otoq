@@ -141,7 +141,7 @@ async function normalizeAllMedia() {
   }
   
   // prepare media items for batch processing
-  const mediaToProcess = allMedia
+  const mediaToProcess: MediaItemToProcess[] = allMedia
     .filter(media => {
       // if we're re-processing, we need to handle existing normalized files
       const forceReprocess = process.argv.includes('--force')
@@ -168,7 +168,9 @@ async function normalizeAllMedia() {
     })
     .map(media => ({
       id: media.id,
-      file_path: media.file_path
+      file_path: media.file_path,
+      processed_path: undefined,
+      duration: undefined
     }))
   
   console.log(`processing ${mediaToProcess.length} media files...`)
