@@ -24,12 +24,46 @@ export class MediaProcessor {
     return MediaProcessor.instance
   }
 
+  private async isValidMediaFile(filePath: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      // set a timeout to prevent hanging on corrupt files
+      const timeout = setTimeout(() => {
+        console.error(`validation timed out for: ${filePath}`)
+        resolve(false)
+      }, 15000) // 15 second timeout
+      
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        clearTimeout(timeout)
+        
+        if (err) {
+          console.error(`file validation failed: ${filePath} - ${err.message}`)
+          resolve(false)
+          return
+        }
+        
+        if (!metadata?.format?.duration) {
+          console.error(`file has no duration metadata: ${filePath}`)
+          resolve(false)
+          return
+        }
+
+        resolve(true)
+      })
+    })
+  }
+
   public async normalizeAndConvert(inputPath: string, outputDir: string, mediaId?: number): Promise<{
     outputPath: string
     duration: number
   }> {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true })
+    }
+
+    // check file is valid before proceeding
+    const isValid = await this.isValidMediaFile(inputPath)
+    if (!isValid) {
+      throw new Error(`corrupt or invalid media file: ${inputPath}`)
     }
 
     const originalExt = path.extname(inputPath).toLowerCase()
@@ -59,8 +93,15 @@ export class MediaProcessor {
 
   private async analyzeMedia(filePath: string): Promise<{ maxVolume: number, duration: number }> {
     return new Promise((resolve, reject) => {
+      // timeout for getting duration
+      const durationTimeout = setTimeout(() => {
+        reject(new Error(`ffprobe duration analysis timed out for: ${filePath}`))
+      }, 15000) // 15 second timeout
+      
       // first get duration
       ffmpeg.ffprobe(filePath, (err, metadata) => {
+        clearTimeout(durationTimeout)
+        
         if (err) {
           reject(new Error(`failed to analyze media: ${err.message}`))
           return
@@ -68,13 +109,23 @@ export class MediaProcessor {
 
         const duration = Math.floor((metadata?.format?.duration || 0) * 1000)
 
+        // timeout for volume analysis
+        const volumeTimeout = setTimeout(() => {
+          reject(new Error(`volume analysis timed out for: ${filePath}`))
+        }, 20000) // 20 second timeout
+        
         // then analyze volume
         ffmpeg(filePath)
           .audioFilters('volumedetect')
           .format('null')
           .output('/dev/null')
-          .on('error', (err) => reject(new Error(`volume analysis failed: ${err.message}`)))
+          .on('error', (err) => {
+            clearTimeout(volumeTimeout)
+            reject(new Error(`volume analysis failed: ${err.message}`))
+          })
           .on('end', (stdout, stderr) => {
+            clearTimeout(volumeTimeout)
+            
             if (!stderr) {
               reject(new Error('no stderr output from ffmpeg volume analysis'))
               return
@@ -96,6 +147,11 @@ export class MediaProcessor {
 
   private async processMedia(inputPath: string, outputPath: string, volAdjustment: number, convertFormat: boolean): Promise<void> {
     return new Promise((resolve, reject) => {
+      // timeout for processing - longer since conversion can take time
+      const processTimeout = setTimeout(() => {
+        reject(new Error(`processing timed out for: ${inputPath}`))
+      }, 300000) // 5 minutes timeout
+      
       let command = ffmpeg(inputPath).audioFilters(`volume=${volAdjustment}dB`)
 
       if (convertFormat) {
@@ -110,8 +166,14 @@ export class MediaProcessor {
 
       command
         .output(outputPath)
-        .on('error', (err) => reject(new Error(`processing failed: ${err.message}`)))
-        .on('end', () => resolve())
+        .on('error', (err) => {
+          clearTimeout(processTimeout)
+          reject(new Error(`processing failed: ${err.message}`))
+        })
+        .on('end', () => {
+          clearTimeout(processTimeout)
+          resolve()
+        })
         .run()
     })
   }
