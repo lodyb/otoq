@@ -127,13 +127,15 @@ export class MediaProcessor {
             clearTimeout(volumeTimeout)
             
             if (!stderr) {
-              reject(new Error('no stderr output from ffmpeg volume analysis'))
+              console.error('no stderr output from ffmpeg volume analysis, using default volume')
+              resolve({ maxVolume: this.TARGET_VOLUME, duration })
               return
             }
 
             const match = stderr.match(/max_volume: ([-\d.]+) dB/)
             if (!match || !match[1]) {
-              reject(new Error('could not detect volume level'))
+              console.error(`could not detect volume level for ${filePath}, using default volume`)
+              resolve({ maxVolume: this.TARGET_VOLUME, duration })
               return
             }
 
