@@ -269,19 +269,15 @@ export class MediaProcessor {
         
         if (useHwAccel) {
           try {
-            console.log('using nvidia hardware acceleration with nv12 pixel format')
+            console.log('using nvidia hardware acceleration')
             
             command = command
               .outputOptions('-c:v h264_nvenc')      // nvidia h264 encoder
-              .outputOptions('-preset p4')           // nvenc preset (p1=slow/best, p7=fast/worst)
-              .outputOptions('-tune hq')             // high quality tuning
-              .outputOptions('-rc:v vbr_hq')         // variable bitrate high quality mode
-              .outputOptions(`-cq:v ${crf}`)         // quality level (higher = more compression)
-              .outputOptions(`-b:v 0`)               // let qp control bitrate
-              .outputOptions(`-maxrate:v ${Math.min(5000, metadata.bitrate ? metadata.bitrate/1000 : 2000)}k`)  // max video bitrate
+              .outputOptions('-preset p2')           // preset (p1=slow/best, p7=fast/worst)
+              .outputOptions('-rc constqp')          // constant qp mode (simpler than vbr_hq)
+              .outputOptions(`-qp ${crf}`)       // quality parameter for nvidia
               .outputOptions('-c:a aac')             // audio codec
               .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
-              .outputOptions('-pix_fmt nv12')        // nv12 pixel format for potentially better quality
               .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
           } catch (err) {
             console.error(`nvidia encoding setup failed: ${err}, falling back to software`)
