@@ -282,13 +282,19 @@ export class MediaProcessor {
         
         if (useHwAccel) {
           try {
-            console.log('using nvidia hardware acceleration')
+            console.log('using nvidia hardware acceleration (slow high quality mode)')
             
             command = command
               .outputOptions('-c:v h264_nvenc')      // nvidia h264 encoder
-              .outputOptions('-preset p2')           // preset (p1=slow/best, p7=fast/worst)
-              .outputOptions('-rc constqp')          // constant qp mode (simpler than vbr_hq)
-              .outputOptions(`-qp ${crf}`)       // quality parameter for nvidia
+              .outputOptions('-preset p1')           // p1 is slowest but highest quality preset
+              .outputOptions('-rc vbr')              // variable bitrate for better quality
+              .outputOptions('-b:v 0')               // let qp control quality
+              .outputOptions(`-cq ${crf}`)           // quality level (higher = more compression)
+              .outputOptions(`-maxrate:v ${Math.min(8000, metadata.bitrate ? metadata.bitrate/1000 : 4000)}k`)  // higher max bitrate
+              .outputOptions(`-bufsize ${Math.min(16000, metadata.bitrate ? metadata.bitrate/500 : 8000)}k`)    // larger buffer for smoother bitrate
+              .outputOptions('-spatial-aq 1')        // spatial adaptive quantization for better detail
+              .outputOptions('-temporal-aq 1')       // temporal adaptive quantization
+              .outputOptions('-aq-strength 15')      // strength of adaptive quantization (higher = stronger)
               .outputOptions('-c:a aac')             // audio codec
               .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
               .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
