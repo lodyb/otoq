@@ -21,10 +21,12 @@ interface MediaMetadata {
 export class MediaProcessor {
   private static instance: MediaProcessor
   private TARGET_VOLUME = -3 
-  private MAX_WIDTH = 1280
-  private MAX_HEIGHT = 720
   private MAX_FILE_SIZE_BYTES = 9 * 1024 * 1024  // exact 9MB limit
   private USE_HARDWARE_ACCEL = true
+  private readonly RESOLUTION_STEPS = [
+    { width: 1280, height: 720 },
+    { width: 640, height: 360 }
+  ]
 
   private constructor() {}
 
@@ -196,38 +198,36 @@ export class MediaProcessor {
     console.log(`processing ${path.basename(inputPath)} - ${metadata.hasVideo ? 'video' : 'audio'} file`);
     console.log(`source: ${metadata.size ? Math.round(metadata.size/1024/1024) + 'MB' : 'unknown size'}, ${metadata.duration}ms duration`);
     
-    let currentWidth = this.MAX_WIDTH;
-    let currentHeight = this.MAX_HEIGHT;
+    let resolutionIndex = 0; // start with highest resolution
     let audioBitrateNum = parseInt(audioBitrate.replace('k', ''));
     let attempt = 1;
     const maxAttempts = 10;
-    let mp3Quality = this.isLargeFile(metadata.size) ? 4 : 2; // for audio files
+    let mp3Quality = this.isLargeFile(metadata.size) ? 5 : 2; // for audio files
+    let opusQuality = this.isLargeFile(metadata.size) ? 5 : 3; // for video audio (1-10 scale, lower=better)
     
     // for extremely large files, start with more aggressive settings
     if (metadata.size && metadata.size > 30 * 1024 * 1024) { // >30MB
-      console.log(`extremely large file (${Math.round(metadata.size/1024/1024)}MB), starting with very aggressive settings`);
-      crf += 10;
-      currentWidth = Math.floor(currentWidth * 0.7);
-      currentHeight = Math.floor(currentHeight * 0.7);
+      console.log(`extremely large file (${Math.round(metadata.size/1024/1024)}MB), starting with more aggressive settings`);
+      crf += 10; // much higher compression
+      resolutionIndex = 1; // start with 640x360
       audioBitrateNum = 128; // start with minimum
       mp3Quality = 5; // worse quality for audio
+      opusQuality = 6; // worse quality for video audio
     }
     
     while (attempt <= maxAttempts) {
-      // prevent resolution from getting too small for encoders
-      if (currentWidth < 160 || currentHeight < 120) {
-        currentWidth = 160;
-        currentHeight = 120;
-      }
+      // get current resolution from steps
+      const resolution = this.RESOLUTION_STEPS[resolutionIndex];
       
       console.log(`compression attempt ${attempt}/${maxAttempts}: ${metadata.hasVideo ? 
-        `crf=${crf}, resolution=${currentWidth}x${currentHeight}, audioBitrate=${audioBitrateNum}k` : 
+        `crf=${crf}, resolution=${resolution.width}x${resolution.height}, audioBitrate=${audioBitrateNum}k` : 
         `mp3Quality=${mp3Quality}`}`);
       
       try {
         if (metadata.hasVideo) {
           // run ffmpeg with current video settings
-          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, `${audioBitrateNum}k`, currentWidth, currentHeight);
+          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, 
+                              `${audioBitrateNum}k`, resolution.width, resolution.height, opusQuality);
         } else {
           // audio-only with specific quality
           await this.runFfmpegAudio(inputPath, outputPath, volAdjustment, mp3Quality);
@@ -249,11 +249,17 @@ export class MediaProcessor {
             
             // increase compression for next attempt
             if (metadata.hasVideo) {
-              // for video: more extreme settings with each attempt
-              crf += 5; // increase CRF (higher = more compression)
-              currentWidth = Math.floor(currentWidth * 0.8); // reduce resolution
-              currentHeight = Math.floor(currentHeight * 0.8);
-              audioBitrateNum = Math.max(128, Math.floor(audioBitrateNum * 0.9)); // keep audio quality decent
+              // for video: first try increasing crf before dropping resolution
+              if (attempt % 2 === 1) {
+                crf += 4; // increase CRF (higher = more compression)
+                opusQuality = Math.min(10, opusQuality + 1); // worse audio quality (1-10)
+              } else {
+                // only drop resolution every other attempt, and only if we haven't reached minimum
+                if (resolutionIndex < this.RESOLUTION_STEPS.length - 1) {
+                  resolutionIndex++;
+                }
+                audioBitrateNum = Math.max(96, Math.floor(audioBitrateNum * 0.9)); // keep audio quality decent
+              }
             } else {
               // for audio: incrementally increase quality number (worse quality)
               mp3Quality = Math.min(9, mp3Quality + 1);
@@ -266,10 +272,14 @@ export class MediaProcessor {
         if (attempt >= maxAttempts) throw err;
         
         if (metadata.hasVideo) {
-          crf += 5;
-          audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.7));
-          currentWidth = Math.floor(currentWidth * 0.7);
-          currentHeight = Math.floor(currentHeight * 0.7);
+          crf = Math.min(51, crf + 4); // x264 max is 51
+          audioBitrateNum = Math.max(64, Math.floor(audioBitrateNum * 0.8));
+          opusQuality = Math.min(10, opusQuality + 2);
+          
+          // go to next resolution if available
+          if (resolutionIndex < this.RESOLUTION_STEPS.length - 1) {
+            resolutionIndex++;
+          }
         } else {
           mp3Quality = Math.min(9, mp3Quality + 2); // much worse quality for next attempt
         }
@@ -303,7 +313,8 @@ export class MediaProcessor {
     crf: number, 
     audioBitrate: string,
     width: number,
-    height: number
+    height: number,
+    opusQuality: number
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const processTimeout = setTimeout(() => {
@@ -322,7 +333,6 @@ export class MediaProcessor {
         
         // check if source file is large and needs more compression from the start
         const isLarge = this.isLargeFile(metadata.size)
-        const opusQuality = isLarge ? 5 : 3 // lower = higher quality (1-10 scale)
         
         if (useHwAccel) {
           try {
@@ -354,7 +364,7 @@ export class MediaProcessor {
         if (!useHwAccel) {
           command = command
             .outputOptions('-c:v libx264')         // software h264 encoder
-            .outputOptions(`-crf ${crf}`)          // quality (higher = more compression)
+            .outputOptions(`-crf ${Math.min(51, crf)}`)  // quality (higher = more compression), max 51 for x264
             .outputOptions('-preset medium')       // encoding speed vs compression
             .outputOptions('-pix_fmt yuv420p')     // pixel format for compatibility
             .outputOptions('-c:a libopus')         // opus audio codec (better quality than aac)
@@ -364,15 +374,10 @@ export class MediaProcessor {
             .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
         }
       } else {
-        // audio-only output (mp3) with VBR quality settings
-        const isLarge = this.isLargeFile(metadata.size)
-        const mp3Quality = isLarge ? 4 : 2 // VBR quality (0-9, lower is better)
-        
-        console.log(`mp3 encoding with VBR quality ${mp3Quality} ${isLarge ? '(lower quality for large file)' : '(high quality)'}`)
-        
-        command = command
-          .outputOptions('-c:a libmp3lame')     // mp3 codec
-          .outputOptions(`-q:a ${mp3Quality}`)  // VBR quality setting (0-9, lower is better)
+        // audio-only output (mp3) with VBR quality settings - moved to runFfmpegAudio method
+        console.error("runFfmpeg called for audio file, should use runFfmpegAudio instead")
+        reject(new Error("wrong processor method called"))
+        return
       }
 
       command
@@ -389,7 +394,7 @@ export class MediaProcessor {
             const origHwAccel = this.USE_HARDWARE_ACCEL
             this.USE_HARDWARE_ACCEL = false
             
-            this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate, width, height)
+            this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate, width, height, opusQuality)
               .then(() => {
                 // restore original setting and resolve
                 this.USE_HARDWARE_ACCEL = origHwAccel
