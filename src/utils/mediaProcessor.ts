@@ -22,16 +22,21 @@ export class MediaProcessor {
   private static instance: MediaProcessor
   private TARGET_VOLUME = -3 
   private AUDIO_BITRATE = '192k'
-  private VIDEO_CRF = '26' 
-  private MAX_WIDTH = 640
-  private MAX_HEIGHT = 480
+  private VIDEO_CRF = '22'
+  private MAX_WIDTH = 1280
+  private MAX_HEIGHT = 720
   private MAX_FILE_SIZE_BYTES = 8.5 * 1024 * 1024 
+  private USE_HARDWARE_ACCEL = true // enable nvidia encoding
 
   private constructor() {}
 
   public static getInstance(): MediaProcessor {
     if (!MediaProcessor.instance) {
       MediaProcessor.instance = new MediaProcessor()
+    }
+    // disable hardware acceleration in test environment
+    if (process.env.NODE_ENV === 'test') {
+      MediaProcessor.instance.USE_HARDWARE_ACCEL = false
     }
     return MediaProcessor.instance
   }
@@ -256,19 +261,45 @@ export class MediaProcessor {
         .audioFilters(`volume=${volAdjustment}dB`)
       
       if (metadata.hasVideo) {
-        // video output (mp4)
-        command = command
-          .outputOptions('-c:v libx264')        // video codec (h264)
-          .outputOptions(`-crf ${crf}`)         // quality (higher = more compression)
-          .outputOptions('-preset medium')        // encoding speed vs compression
-          .outputOptions('-pix_fmt yuv420p')    // pixel format for compatibility
-          .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
-          .outputOptions('-c:a aac')            // audio codec
-          
+        // try hardware encoding if enabled
+        let useHwAccel = this.USE_HARDWARE_ACCEL
+        
         // scale video to max resolution while maintaining aspect ratio
-        command = command.outputOptions(
-          `-vf scale=w='min(${this.MAX_WIDTH},iw)':h='min(${this.MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`
-        )
+        const scaleFilter = `scale=w='min(${this.MAX_WIDTH},iw)':h='min(${this.MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`
+        
+        if (useHwAccel) {
+          try {
+            console.log('using nvidia hardware acceleration with nv12 pixel format')
+            
+            command = command
+              .outputOptions('-c:v h264_nvenc')      // nvidia h264 encoder
+              .outputOptions('-preset p4')           // nvenc preset (p1=slow/best, p7=fast/worst)
+              .outputOptions('-tune hq')             // high quality tuning
+              .outputOptions('-rc:v vbr_hq')         // variable bitrate high quality mode
+              .outputOptions(`-cq:v ${crf}`)         // quality level (higher = more compression)
+              .outputOptions(`-b:v 0`)               // let qp control bitrate
+              .outputOptions(`-maxrate:v ${Math.min(5000, metadata.bitrate ? metadata.bitrate/1000 : 2000)}k`)  // max video bitrate
+              .outputOptions('-c:a aac')             // audio codec
+              .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
+              .outputOptions('-pix_fmt nv12')        // nv12 pixel format for potentially better quality
+              .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
+          } catch (err) {
+            console.error(`nvidia encoding setup failed: ${err}, falling back to software`)
+            useHwAccel = false
+          }
+        }
+        
+        // fallback to software encoding if hardware encoding is disabled or failed
+        if (!useHwAccel) {
+          command = command
+            .outputOptions('-c:v libx264')         // software h264 encoder
+            .outputOptions(`-crf ${crf}`)          // quality (higher = more compression)
+            .outputOptions('-preset medium')       // encoding speed vs compression
+            .outputOptions('-pix_fmt yuv420p')     // pixel format for compatibility
+            .outputOptions('-c:a aac')             // audio codec
+            .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
+            .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
+        }
       } else {
         // audio-only output (mp3)
         command = command
@@ -280,6 +311,32 @@ export class MediaProcessor {
         .output(outputPath)
         .on('error', (err) => {
           clearTimeout(processTimeout)
+          
+          // special handling for hardware encoding failure - retry with software
+          if (this.USE_HARDWARE_ACCEL && metadata.hasVideo && err.message.includes('nvenc')) {
+            console.error(`nvidia encoder failed: ${err.message}`)
+            console.log(`retrying with software encoder`)
+            
+            // disable hardware acceleration for this run and retry
+            const origHwAccel = this.USE_HARDWARE_ACCEL
+            this.USE_HARDWARE_ACCEL = false
+            
+            this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate)
+              .then(() => {
+                // restore original setting and resolve
+                this.USE_HARDWARE_ACCEL = origHwAccel
+                resolve()
+              })
+              .catch((swErr) => {
+                // restore original setting and reject
+                this.USE_HARDWARE_ACCEL = origHwAccel
+                reject(new Error(`software encoding also failed: ${swErr.message}`))
+              })
+            
+            return
+          }
+          
+          // regular error handling
           reject(new Error(`processing failed: ${err.message}`))
         })
         .on('end', () => {
