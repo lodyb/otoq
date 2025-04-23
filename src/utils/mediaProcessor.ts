@@ -200,14 +200,38 @@ export class MediaProcessor {
     let currentHeight = this.MAX_HEIGHT;
     let audioBitrateNum = parseInt(audioBitrate.replace('k', ''));
     let attempt = 1;
-    const maxAttempts = 10; // increased from 5 to 10
+    const maxAttempts = 10;
+    let mp3Quality = this.isLargeFile(metadata.size) ? 4 : 2; // for audio files
+    
+    // for extremely large files, start with more aggressive settings
+    if (metadata.size && metadata.size > 30 * 1024 * 1024) { // >30MB
+      console.log(`extremely large file (${Math.round(metadata.size/1024/1024)}MB), starting with very aggressive settings`);
+      crf += 10;
+      currentWidth = Math.floor(currentWidth * 0.7);
+      currentHeight = Math.floor(currentHeight * 0.7);
+      audioBitrateNum = 128; // start with minimum
+      mp3Quality = 5; // worse quality for audio
+    }
     
     while (attempt <= maxAttempts) {
-      console.log(`compression attempt ${attempt}/${maxAttempts}: crf=${crf}, resolution=${currentWidth}x${currentHeight}, audioBitrate=${audioBitrateNum}k`);
+      // prevent resolution from getting too small for encoders
+      if (currentWidth < 160 || currentHeight < 120) {
+        currentWidth = 160;
+        currentHeight = 120;
+      }
+      
+      console.log(`compression attempt ${attempt}/${maxAttempts}: ${metadata.hasVideo ? 
+        `crf=${crf}, resolution=${currentWidth}x${currentHeight}, audioBitrate=${audioBitrateNum}k` : 
+        `mp3Quality=${mp3Quality}`}`);
       
       try {
-        // run ffmpeg with current settings
-        await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, `${audioBitrateNum}k`, currentWidth, currentHeight);
+        if (metadata.hasVideo) {
+          // run ffmpeg with current video settings
+          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, `${audioBitrateNum}k`, currentWidth, currentHeight);
+        } else {
+          // audio-only with specific quality
+          await this.runFfmpegAudio(inputPath, outputPath, volAdjustment, mp3Quality);
+        }
         
         // check if result is small enough
         if (fs.existsSync(outputPath)) {
@@ -231,8 +255,8 @@ export class MediaProcessor {
               currentHeight = Math.floor(currentHeight * 0.8);
               audioBitrateNum = Math.max(128, Math.floor(audioBitrateNum * 0.9)); // keep audio quality decent
             } else {
-              // for audio: reduce bitrate but keep decent quality
-              audioBitrateNum = Math.max(128, Math.floor(audioBitrateNum * 0.8));
+              // for audio: incrementally increase quality number (worse quality)
+              mp3Quality = Math.min(9, mp3Quality + 1);
             }
           }
         }
@@ -241,18 +265,36 @@ export class MediaProcessor {
         // try again with more aggressive settings if not the last attempt
         if (attempt >= maxAttempts) throw err;
         
-        crf += 5;
-        audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.7));
-        currentWidth = Math.floor(currentWidth * 0.7);
-        currentHeight = Math.floor(currentHeight * 0.7);
+        if (metadata.hasVideo) {
+          crf += 5;
+          audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.7));
+          currentWidth = Math.floor(currentWidth * 0.7);
+          currentHeight = Math.floor(currentHeight * 0.7);
+        } else {
+          mp3Quality = Math.min(9, mp3Quality + 2); // much worse quality for next attempt
+        }
       }
       
       attempt++;
     }
     
+    // if all attempts fail and we have a video file, try last resort mode - audio only
+    if (metadata.hasVideo && metadata.size && metadata.size > 15 * 1024 * 1024) {
+      console.log("all video attempts failed - trying audio-only extraction as last resort");
+      try {
+        await this.extractAudioOnly(inputPath, outputPath, volAdjustment);
+        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size <= this.MAX_FILE_SIZE_BYTES) {
+          console.log(`successful audio-only extraction, size: ${Math.round(fs.statSync(outputPath).size/1024/1024)}MB`);
+          return;
+        }
+      } catch (err) {
+        console.error(`audio extraction failed too: ${err}`);
+      }
+    }
+    
     throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit after ${maxAttempts} attempts`);
   }
-  
+
   private async runFfmpeg(
     inputPath: string,
     outputPath: string,
@@ -364,6 +406,69 @@ export class MediaProcessor {
           
           // regular error handling
           reject(new Error(`processing failed: ${err.message}`))
+        })
+        .on('end', () => {
+          clearTimeout(processTimeout)
+          resolve()
+        })
+        .run()
+    })
+  }
+
+  private async runFfmpegAudio(
+    inputPath: string, 
+    outputPath: string, 
+    volAdjustment: number,
+    mp3Quality: number
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const processTimeout = setTimeout(() => {
+        reject(new Error(`audio processing timed out for: ${inputPath}`))
+      }, 180000) // 3 minutes timeout
+      
+      console.log(`mp3 encoding with VBR quality ${mp3Quality} (${mp3Quality <= 3 ? 'high' : mp3Quality <= 6 ? 'medium' : 'low'} quality)`)
+      
+      ffmpeg(inputPath)
+        .audioFilters(`volume=${volAdjustment}dB`)
+        .outputOptions('-c:a libmp3lame')    // mp3 codec
+        .outputOptions(`-q:a ${mp3Quality}`) // VBR quality (0-9, lower is better)
+        .output(outputPath)
+        .on('error', (err) => {
+          clearTimeout(processTimeout)
+          reject(new Error(`audio processing failed: ${err.message}`))
+        })
+        .on('end', () => {
+          clearTimeout(processTimeout)
+          resolve()
+        })
+        .run()
+    })
+  }
+  
+  private async extractAudioOnly(
+    inputPath: string,
+    outputPath: string,
+    volAdjustment: number
+  ): Promise<void> {
+    // change output extension to mp3
+    const mp3Path = outputPath.replace(/\.[^.]+$/, '.mp3')
+    
+    return new Promise((resolve, reject) => {
+      const processTimeout = setTimeout(() => {
+        reject(new Error(`audio extraction timed out for: ${inputPath}`))
+      }, 180000) // 3 minutes timeout
+      
+      console.log(`extracting audio only with high compression (last resort)`)
+      
+      ffmpeg(inputPath)
+        .audioFilters(`volume=${volAdjustment}dB`)
+        .noVideo() // skip video stream
+        .outputOptions('-c:a libmp3lame')
+        .outputOptions('-q:a 7') // low quality but small size
+        .output(mp3Path)
+        .on('error', (err) => {
+          clearTimeout(processTimeout)
+          reject(new Error(`audio extraction failed: ${err.message}`))
         })
         .on('end', () => {
           clearTimeout(processTimeout)
