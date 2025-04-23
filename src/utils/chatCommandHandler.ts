@@ -30,8 +30,7 @@ export class ChatCommandHandler {
       // if no search term, just ignore
       if (!searchTerm) return;
       
-      // show typing indicator while processing
-      message.channel.sendTyping?.() || await message.channel.typing?.start?.();
+      // typing indicator removed - was causing typescript errors
       
       // search for media with matching title
       const db = DatabaseManager.getInstance();
