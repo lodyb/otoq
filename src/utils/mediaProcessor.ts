@@ -377,39 +377,52 @@ export class MediaProcessor {
       );
       
       // keep bitrate in reasonable range
-      const audioBitrate = Math.max(96, Math.min(192, targetBitrate));
+      const audioBitrate = Math.max(128, Math.min(192, targetBitrate));
       return { crf: 23, audioBitrate: `${audioBitrate}k` };
     }
     
-    // for video files
-    let crf = Number(this.VIDEO_CRF);
-    let audioBitrate = this.AUDIO_BITRATE;
+    // video: calculate target total bitrate based on duration and max file size
+    const targetTotalBitrateBps = (this.MAX_FILE_SIZE_BYTES * 8 * 0.9) / (metadata.duration / 1000);
     
-    // if we can estimate size ratio based on source file
-    if (metadata.size && metadata.size > 0) {
-      const compressionRatio = this.MAX_FILE_SIZE_BYTES / metadata.size;
-      
-      // adjust crf based on compression ratio needed
-      // the relationship isn't linear but this gives us a starting point
-      if (compressionRatio < 0.2) {
-        // need extreme compression
-        crf = 42;
-      } else if (compressionRatio < 0.4) {
-        // need high compression
-        crf = 36;
-      } else if (compressionRatio < 0.6) {
-        // need moderate compression
-        crf = 32;
-      } else if (compressionRatio < 0.8) {
-        // need light compression
-        crf = 28;
-      } else {
-        // need minimal compression
-        crf = 23;
-      }
+    // allocate bitrate between audio and video
+    // we prioritize audio quality - guarantee at least 128k, aim for 192k when possible
+    let audioBitrateKbps = 192;  // start with ideal quality
+    
+    // check if we can afford 192k audio
+    const minAudioBitrateKbps = 128;  // minimum acceptable audio quality
+    const remainingForVideo = (targetTotalBitrateBps / 1000) - audioBitrateKbps;
+    
+    // if video gets less than 100kbps, reduce audio quality but never below 128k
+    if (remainingForVideo < 100) {
+      // reduce audio quality to give video at least 100kbps, but keep minimum audio quality
+      audioBitrateKbps = Math.max(minAudioBitrateKbps, 
+                                 (targetTotalBitrateBps / 1000) - 100);
     }
     
-    return { crf, audioBitrate };
+    // the rest goes to video
+    const targetVideoBitrateKbps = Math.max(100, (targetTotalBitrateBps / 1000) - audioBitrateKbps);
+    
+    // map video bitrate to appropriate crf/qp value (roughly)
+    let crf = 22;  // default
+    
+    // adjust crf based on target video bitrate
+    if (targetVideoBitrateKbps < 400) {
+      crf = 42;  // very low bitrate
+    } else if (targetVideoBitrateKbps < 800) {
+      crf = 36;  // low bitrate
+    } else if (targetVideoBitrateKbps < 1200) {
+      crf = 32;  // medium low bitrate
+    } else if (targetVideoBitrateKbps < 2400) {
+      crf = 28;  // medium bitrate
+    } else if (targetVideoBitrateKbps < 4000) {
+      crf = 24;  // medium high bitrate
+    } else {
+      crf = 22;  // high bitrate
+    }
+    
+    console.log(`calculated target bitrate: ${Math.round(targetTotalBitrateBps/1000)}kbps (${Math.round(targetVideoBitrateKbps)}k video + ${audioBitrateKbps}k audio), crf: ${crf}`);
+    
+    return { crf, audioBitrate: `${audioBitrateKbps}k` };
   }
 
   public async batchProcessMedia(mediaItems: MediaItemToProcess[], outputDir: string): Promise<{
