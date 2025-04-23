@@ -21,11 +21,9 @@ interface MediaMetadata {
 export class MediaProcessor {
   private static instance: MediaProcessor
   private TARGET_VOLUME = -3 
-  private AUDIO_BITRATE = '192k'
-  private VIDEO_CRF = '22'
   private MAX_WIDTH = 1280
   private MAX_HEIGHT = 720
-  private MAX_FILE_SIZE_BYTES = 8.5 * 1024 * 1024
+  private MAX_FILE_SIZE_BYTES = 9 * 1024 * 1024  // exact 9MB limit
   private USE_HARDWARE_ACCEL = true
 
   private constructor() {}
@@ -280,9 +278,13 @@ export class MediaProcessor {
         // scale video to max resolution while maintaining aspect ratio
         const scaleFilter = `scale=w='min(${width},iw)':h='min(${height},ih)':force_original_aspect_ratio=decrease`
         
+        // check if source file is large and needs more compression from the start
+        const isLarge = this.isLargeFile(metadata.size)
+        const opusQuality = isLarge ? 5 : 3 // lower = higher quality (1-10 scale)
+        
         if (useHwAccel) {
           try {
-            console.log('using nvidia hardware acceleration (slow high quality mode)')
+            console.log(`using nvidia hardware acceleration ${isLarge ? '(extra compression for large file)' : '(high quality mode)'}`)
             
             command = command
               .outputOptions('-c:v h264_nvenc')      // nvidia h264 encoder
@@ -296,7 +298,7 @@ export class MediaProcessor {
               .outputOptions('-temporal-aq 1')       // temporal adaptive quantization
               .outputOptions('-aq-strength 15')      // strength of adaptive quantization (higher = stronger)
               .outputOptions('-c:a libopus')         // opus audio codec (better quality than aac)
-              .outputOptions('-b:a 128k')            // target bitrate
+              .outputOptions(`-compression_level ${opusQuality}`) // opus compression level (1-10, lower = better)
               .outputOptions('-vbr on')              // variable bitrate mode
               .outputOptions('-application audio')    // favor quality over speech
               .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
@@ -314,16 +316,21 @@ export class MediaProcessor {
             .outputOptions('-preset medium')       // encoding speed vs compression
             .outputOptions('-pix_fmt yuv420p')     // pixel format for compatibility
             .outputOptions('-c:a libopus')         // opus audio codec (better quality than aac)
-            .outputOptions('-b:a 128k')            // target bitrate
+            .outputOptions(`-compression_level ${opusQuality}`) // opus compression level (1-10, lower = better)
             .outputOptions('-vbr on')              // variable bitrate mode
             .outputOptions('-application audio')    // favor quality over speech
             .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
         }
       } else {
         // audio-only output (mp3) with VBR quality settings
+        const isLarge = this.isLargeFile(metadata.size)
+        const mp3Quality = isLarge ? 4 : 2 // VBR quality (0-9, lower is better)
+        
+        console.log(`mp3 encoding with VBR quality ${mp3Quality} ${isLarge ? '(lower quality for large file)' : '(high quality)'}`)
+        
         command = command
           .outputOptions('-c:a libmp3lame')     // mp3 codec
-          .outputOptions('-q:a 2')              // VBR quality setting (0-9, lower is better, 2 is ~190kbps VBR)
+          .outputOptions(`-q:a ${mp3Quality}`)  // VBR quality setting (0-9, lower is better)
       }
 
       command
@@ -427,6 +434,12 @@ export class MediaProcessor {
     console.log(`calculated target bitrate: ${Math.round(targetTotalBitrateBps/1000)}kbps (${Math.round(targetVideoBitrateKbps)}k video + ${audioBitrateKbps}k audio), crf: ${crf}`);
     
     return { crf, audioBitrate: `${audioBitrateKbps}k` };
+  }
+
+  private isLargeFile(fileSize?: number): boolean {
+    if (!fileSize) return false
+    const sizeInMB = fileSize / (1024 * 1024)
+    return sizeInMB > 9
   }
 
   public async batchProcessMedia(mediaItems: MediaItemToProcess[], outputDir: string): Promise<{

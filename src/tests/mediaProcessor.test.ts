@@ -97,7 +97,8 @@ describe('MediaProcessor', () => {
     // check if video outputOptions were called
     const mockInstance = mockFfmpeg.mock.results[0].value
     expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:v libx264')
-    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:a aac')
+    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:a libopus') // now using opus
+    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-vbr on') // using vbr mode
   })
   
   test('should normalize mp3 and keep mp3 format', async () => {
@@ -120,7 +121,7 @@ describe('MediaProcessor', () => {
     // check that audio-specific output options were used
     const mockInstance = mockFfmpeg.mock.results[0].value
     expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:a libmp3lame')
-    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-b:a 192k')
+    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-q:a 2') // now using VBR quality instead of bitrate
   })
   
   test('should use mediaId in filename when provided', async () => {
