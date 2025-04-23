@@ -25,7 +25,7 @@ export class MediaProcessor {
   private VIDEO_CRF = '22'
   private MAX_WIDTH = 1280
   private MAX_HEIGHT = 720
-  private MAX_FILE_SIZE_BYTES = 9 * 1024 * 1024
+  private MAX_FILE_SIZE_BYTES = 8.5 * 1024 * 1024
   private USE_HARDWARE_ACCEL = true
 
   private constructor() {}
