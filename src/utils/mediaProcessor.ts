@@ -231,10 +231,10 @@ export class MediaProcessor {
               crf += 5; // increase CRF (higher = more compression)
               currentWidth = Math.floor(currentWidth * 0.8); // reduce resolution
               currentHeight = Math.floor(currentHeight * 0.8);
-              audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.5)); // reduce audio quality
+              audioBitrateNum = Math.max(128, Math.floor(audioBitrateNum * 0.9)); // keep audio quality decent
             } else {
-              // for audio: reduce bitrate more aggressively
-              audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.5));
+              // for audio: reduce bitrate but keep decent quality
+              audioBitrateNum = Math.max(128, Math.floor(audioBitrateNum * 0.8));
             }
           }
         }
