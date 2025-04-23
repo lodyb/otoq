@@ -14,16 +14,18 @@ interface MediaMetadata {
   duration: number
   width?: number
   height?: number
+  bitrate?: number
+  size?: number
 }
 
 export class MediaProcessor {
   private static instance: MediaProcessor
-  private TARGET_VOLUME = -3 // target peak volume in dB
+  private TARGET_VOLUME = -3 
   private AUDIO_BITRATE = '192k'
-  private VIDEO_CRF = '22'
-  private MAX_WIDTH = 1280
-  private MAX_HEIGHT = 720
-  private MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024 // 8MB max for discord
+  private VIDEO_CRF = '26' 
+  private MAX_WIDTH = 640
+  private MAX_HEIGHT = 480
+  private MAX_FILE_SIZE_BYTES = 8.5 * 1024 * 1024 
 
   private constructor() {}
 
@@ -76,6 +78,8 @@ export class MediaProcessor {
         }
         
         const duration = Math.floor((metadata?.format?.duration || 0) * 1000)
+        const size = metadata?.format?.size ? Number(metadata.format.size) : fs.statSync(filePath).size
+        const bitrate = metadata?.format?.bit_rate ? Number(metadata.format.bit_rate) : 0
         
         // check if there's a video stream
         const videoStream = metadata?.streams?.find(stream => stream.codec_type === 'video' && 
@@ -86,12 +90,16 @@ export class MediaProcessor {
             hasVideo: true,
             duration,
             width: videoStream.width,
-            height: videoStream.height
+            height: videoStream.height,
+            bitrate,
+            size
           })
         } else {
           resolve({
             hasVideo: false,
-            duration
+            duration,
+            bitrate,
+            size
           })
         }
       })
@@ -179,48 +187,56 @@ export class MediaProcessor {
     volAdjustment: number, 
     metadata: MediaMetadata
   ): Promise<void> {
-    // start with normal quality settings
-    let currentCrf = Number(this.VIDEO_CRF)
-    let currentAudioBitrate = this.AUDIO_BITRATE
-    let attemptCount = 0
-    const maxAttempts = 3
+    // calculate optimal encoding settings based on source media
+    const { crf, audioBitrate } = this.calculateCompressionSettings(metadata);
     
-    while (attemptCount < maxAttempts) {
-      attemptCount++
+    console.log(`processing ${path.basename(inputPath)} - ${metadata.hasVideo ? 'video' : 'audio'} file`);
+    console.log(`source: ${metadata.size ? Math.round(metadata.size/1024/1024) + 'MB' : 'unknown size'}, ${metadata.duration}ms duration`);
+    console.log(`settings: ${metadata.hasVideo ? `crf=${crf}, ` : ''}audioBitrate=${audioBitrate}`);
+    
+    // first try with calculated settings
+    try {
+      await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate);
       
-      try {
-        await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, currentCrf, currentAudioBitrate)
+      // verify file size
+      if (fs.existsSync(outputPath)) {
+        const stats = fs.statSync(outputPath);
+        console.log(`output size: ${Math.round(stats.size/1024/1024)}MB`);
         
-        // check output file size
-        if (fs.existsSync(outputPath)) {
-          const stats = fs.statSync(outputPath)
-          
-          if (stats.size <= this.MAX_FILE_SIZE_BYTES) {
-            // success - file is under size limit
-            return
-          }
-          
-          console.log(`output too large (${Math.round(stats.size/1024/1024)}MB), retrying with higher compression...`)
-          
-          // increase compression for next attempt
-          if (metadata.hasVideo) {
-            // for video: increase CRF (lower quality = smaller file)
-            currentCrf += 4
-          } else {
-            // for audio: reduce bitrate
-            const currentBitrateNum = parseInt(currentAudioBitrate.replace('k', ''))
-            const newBitrate = Math.max(96, currentBitrateNum - 64) // min 96kbps
-            currentAudioBitrate = `${newBitrate}k`
-          }
+        if (stats.size <= this.MAX_FILE_SIZE_BYTES) {
+          return; // success!
         }
-      } catch (err) {
-        // if final attempt, rethrow
-        if (attemptCount >= maxAttempts) throw err
-        console.error(`compression attempt ${attemptCount} failed: ${err}, retrying...`)
+        
+        console.log(`output still too large, using emergency compression`);
+        
+        // emergency compression with more aggressive settings
+        if (metadata.hasVideo) {
+          // use extreme settings for video
+          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 35, '96k');
+        } else {
+          // use minimum bitrate for audio
+          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 0, '96k');
+        }
+        
+        // check size again
+        if (fs.existsSync(outputPath)) {
+          const finalStats = fs.statSync(outputPath);
+          console.log(`final size: ${Math.round(finalStats.size/1024/1024)}MB`);
+          
+          if (finalStats.size <= this.MAX_FILE_SIZE_BYTES) {
+            return; // success with emergency compression
+          }
+          
+          throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit even with emergency settings`);
+        }
       }
+    } catch (err) {
+      // if file exists but encoding failed, remove it
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+      }
+      throw err;
     }
-    
-    throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit after ${maxAttempts} attempts`)
   }
   
   private async runFfmpeg(
@@ -249,14 +265,10 @@ export class MediaProcessor {
           .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
           .outputOptions('-c:a aac')            // audio codec
           
-        // scale video if needed while maintaining aspect ratio
-        if (metadata.width && metadata.height) {
-          if (metadata.width > this.MAX_WIDTH || metadata.height > this.MAX_HEIGHT) {
-            command = command.outputOptions(
-              `-vf scale=w='min(${this.MAX_WIDTH},iw)':h='min(${this.MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`
-            )
-          }
-        }
+        // scale video to max resolution while maintaining aspect ratio
+        command = command.outputOptions(
+          `-vf scale=w='min(${this.MAX_WIDTH},iw)':h='min(${this.MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`
+        )
       } else {
         // audio-only output (mp3)
         command = command
@@ -276,6 +288,61 @@ export class MediaProcessor {
         })
         .run()
     })
+  }
+
+  private calculateCompressionSettings(metadata: MediaMetadata): {
+    crf: number;
+    audioBitrate: string;
+  } {
+    // for audio-only files
+    if (!metadata.hasVideo) {
+      // calculate based on source size and target limit
+      const targetBitrate = Math.min(
+        // don't exceed 192kbps regardless of file size
+        192,
+        // aim for 75% of max file size to be safe
+        Math.floor((this.MAX_FILE_SIZE_BYTES * 0.75 * 8) / metadata.duration)
+      );
+      
+      // keep bitrate in reasonable range
+      const audioBitrate = Math.max(96, Math.min(192, targetBitrate));
+      return { crf: 23, audioBitrate: `${audioBitrate}k` };
+    }
+    
+    // for video files
+    let crf = Number(this.VIDEO_CRF);
+    let audioBitrate = '128k';
+    
+    // if we can estimate size ratio based on source file
+    if (metadata.size && metadata.size > 0) {
+      const compressionRatio = this.MAX_FILE_SIZE_BYTES / metadata.size;
+      
+      // adjust crf based on compression ratio needed
+      // the relationship isn't linear but this gives us a starting point
+      if (compressionRatio < 0.2) {
+        // need extreme compression
+        crf = 32;
+        audioBitrate = '96k';
+      } else if (compressionRatio < 0.4) {
+        // need high compression
+        crf = 30;
+        audioBitrate = '112k';
+      } else if (compressionRatio < 0.6) {
+        // need moderate compression
+        crf = 28;
+        audioBitrate = '128k';
+      } else if (compressionRatio < 0.8) {
+        // need light compression
+        crf = 26;
+        audioBitrate = '128k';
+      } else {
+        // need minimal compression
+        crf = 23;
+        audioBitrate = '128k';
+      }
+    }
+    
+    return { crf, audioBitrate };
   }
 
   public async batchProcessMedia(mediaItems: MediaItemToProcess[], outputDir: string): Promise<{
