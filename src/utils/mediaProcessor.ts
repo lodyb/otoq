@@ -23,9 +23,14 @@ export class MediaProcessor {
   private TARGET_VOLUME = -3 
   private MAX_FILE_SIZE_BYTES = 9 * 1024 * 1024  // exact 9MB limit
   private USE_HARDWARE_ACCEL = true
+  private MAX_VIDEO_DURATION_MS = 240000 // 4 minutes max for troublesome videos
+  private MAX_NVENC_CRF = 50 // max crf for nvenc
+  private MAX_X264_CRF = 51 // max crf for libx264
   private readonly RESOLUTION_STEPS = [
-    { width: 1280, height: 720 },
-    { width: 640, height: 360 }
+    { width: 1280, height: 720 },  // 720p - default start
+    { width: 640, height: 360 },   // 360p - step down
+    { width: 480, height: 270 },   // low quality but ok
+    { width: 320, height: 180 }    // worst quality that looks ok
   ]
 
   private constructor() {}
@@ -302,6 +307,20 @@ export class MediaProcessor {
       }
     }
     
+    // if all attempts fail and we have a video file, try last resort mode - trim video to max duration
+    if (metadata.hasVideo && metadata.duration && metadata.duration > this.MAX_VIDEO_DURATION_MS) {
+      console.log("all video attempts failed - trying to trim video to max duration as last resort");
+      try {
+        await this.trimVideoToMaxDuration(inputPath, outputPath, volAdjustment, metadata);
+        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size <= this.MAX_FILE_SIZE_BYTES) {
+          console.log(`successful video trimming, size: ${Math.round(fs.statSync(outputPath).size/1024/1024)}MB`);
+          return;
+        }
+      } catch (err) {
+        console.error(`video trimming failed too: ${err}`);
+      }
+    }
+    
     throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit after ${maxAttempts} attempts`);
   }
 
@@ -334,6 +353,10 @@ export class MediaProcessor {
         // check if source file is large and needs more compression from the start
         const isLarge = this.isLargeFile(metadata.size)
         
+        // limit crf values to valid ranges
+        const nvencCrf = Math.min(this.MAX_NVENC_CRF, crf)
+        const x264Crf = Math.min(this.MAX_X264_CRF, crf)
+        
         if (useHwAccel) {
           try {
             console.log(`using nvidia hardware acceleration ${isLarge ? '(extra compression for large file)' : '(high quality mode)'}`)
@@ -343,7 +366,7 @@ export class MediaProcessor {
               .outputOptions('-preset p1')           // p1 is slowest but highest quality preset
               .outputOptions('-rc vbr')              // variable bitrate for better quality
               .outputOptions('-b:v 0')               // let qp control quality
-              .outputOptions(`-cq ${crf}`)           // quality level (higher = more compression)
+              .outputOptions(`-cq ${nvencCrf}`)      // quality level (higher = more compression)
               .outputOptions(`-maxrate:v ${Math.min(8000, metadata.bitrate ? metadata.bitrate/1000 : 4000)}k`)  // higher max bitrate
               .outputOptions(`-bufsize ${Math.min(16000, metadata.bitrate ? metadata.bitrate/500 : 8000)}k`)    // larger buffer for smoother bitrate
               .outputOptions('-spatial-aq 1')        // spatial adaptive quantization for better detail
@@ -364,7 +387,7 @@ export class MediaProcessor {
         if (!useHwAccel) {
           command = command
             .outputOptions('-c:v libx264')         // software h264 encoder
-            .outputOptions(`-crf ${Math.min(51, crf)}`)  // quality (higher = more compression), max 51 for x264
+            .outputOptions(`-crf ${x264Crf}`)      // quality (higher = more compression), limited to max
             .outputOptions('-preset medium')       // encoding speed vs compression
             .outputOptions('-pix_fmt yuv420p')     // pixel format for compatibility
             .outputOptions('-c:a libopus')         // opus audio codec (better quality than aac)
@@ -386,7 +409,11 @@ export class MediaProcessor {
           clearTimeout(processTimeout)
           
           // special handling for hardware encoding failure - retry with software
-          if (this.USE_HARDWARE_ACCEL && metadata.hasVideo && err.message.includes('nvenc')) {
+          if (this.USE_HARDWARE_ACCEL && metadata.hasVideo && (
+              err.message.includes('nvenc') || 
+              err.message.includes('incorrect parameters') ||
+              err.message.includes('Error while opening encoder')
+            )) {
             console.error(`nvidia encoder failed: ${err.message}`)
             console.log(`retrying with software encoder`)
             
@@ -474,6 +501,44 @@ export class MediaProcessor {
         .on('error', (err) => {
           clearTimeout(processTimeout)
           reject(new Error(`audio extraction failed: ${err.message}`))
+        })
+        .on('end', () => {
+          clearTimeout(processTimeout)
+          resolve()
+        })
+        .run()
+    })
+  }
+
+  private async trimVideoToMaxDuration(
+    inputPath: string,
+    outputPath: string,
+    volAdjustment: number,
+    metadata: MediaMetadata
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const processTimeout = setTimeout(() => {
+        reject(new Error(`trimming timed out for: ${inputPath}`))
+      }, 180000) // 3 minutes timeout
+      
+      console.log(`trimming video to max ${this.MAX_VIDEO_DURATION_MS/1000}s and compressing heavily (last resort)`)
+      
+      // use software encoding for reliability
+      ffmpeg(inputPath)
+        .audioFilters(`volume=${volAdjustment}dB`)
+        .outputOptions('-ss 0') // start from beginning
+        .outputOptions(`-t ${this.MAX_VIDEO_DURATION_MS/1000}`) // set max duration
+        .outputOptions('-c:v libx264') // use reliable software encoder
+        .outputOptions('-crf 48') // very high compression
+        .outputOptions('-preset faster') // faster encoding
+        .outputOptions('-pix_fmt yuv420p')
+        .outputOptions('-vf scale=480:270') // force to low res
+        .outputOptions('-c:a libmp3lame') // mp3 audio instead of opus
+        .outputOptions('-q:a 8') // low audio quality
+        .output(outputPath)
+        .on('error', (err) => {
+          clearTimeout(processTimeout)
+          reject(new Error(`trimming failed: ${err.message}`))
         })
         .on('end', () => {
           clearTimeout(processTimeout)
