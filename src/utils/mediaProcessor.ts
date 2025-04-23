@@ -295,8 +295,10 @@ export class MediaProcessor {
               .outputOptions('-spatial-aq 1')        // spatial adaptive quantization for better detail
               .outputOptions('-temporal-aq 1')       // temporal adaptive quantization
               .outputOptions('-aq-strength 15')      // strength of adaptive quantization (higher = stronger)
-              .outputOptions('-c:a aac')             // audio codec
-              .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
+              .outputOptions('-c:a libopus')         // opus audio codec (better quality than aac)
+              .outputOptions('-b:a 128k')            // target bitrate
+              .outputOptions('-vbr on')              // variable bitrate mode
+              .outputOptions('-application audio')    // favor quality over speech
               .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
           } catch (err) {
             console.error(`nvidia encoding setup failed: ${err}, falling back to software`)
@@ -311,15 +313,17 @@ export class MediaProcessor {
             .outputOptions(`-crf ${crf}`)          // quality (higher = more compression)
             .outputOptions('-preset medium')       // encoding speed vs compression
             .outputOptions('-pix_fmt yuv420p')     // pixel format for compatibility
-            .outputOptions('-c:a aac')             // audio codec
-            .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
+            .outputOptions('-c:a libopus')         // opus audio codec (better quality than aac)
+            .outputOptions('-b:a 128k')            // target bitrate
+            .outputOptions('-vbr on')              // variable bitrate mode
+            .outputOptions('-application audio')    // favor quality over speech
             .outputOptions(`-vf ${scaleFilter}`)   // scale video if needed
         }
       } else {
-        // audio-only output (mp3)
+        // audio-only output (mp3) with VBR quality settings
         command = command
           .outputOptions('-c:a libmp3lame')     // mp3 codec
-          .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
+          .outputOptions('-q:a 2')              // VBR quality setting (0-9, lower is better, 2 is ~190kbps VBR)
       }
 
       command
