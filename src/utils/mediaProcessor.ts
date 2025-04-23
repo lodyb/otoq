@@ -212,10 +212,10 @@ export class MediaProcessor {
         // emergency compression with more aggressive settings
         if (metadata.hasVideo) {
           // use extreme settings for video
-          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 35, '96k');
+          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 35, this.AUDIO_BITRATE);
         } else {
           // use minimum bitrate for audio
-          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 0, '96k');
+          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 0, this.AUDIO_BITRATE);
         }
         
         // check size again
@@ -260,7 +260,7 @@ export class MediaProcessor {
         command = command
           .outputOptions('-c:v libx264')        // video codec (h264)
           .outputOptions(`-crf ${crf}`)         // quality (higher = more compression)
-          .outputOptions('-preset fast')        // encoding speed vs compression
+          .outputOptions('-preset medium')        // encoding speed vs compression
           .outputOptions('-pix_fmt yuv420p')    // pixel format for compatibility
           .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
           .outputOptions('-c:a aac')            // audio codec
@@ -311,7 +311,7 @@ export class MediaProcessor {
     
     // for video files
     let crf = Number(this.VIDEO_CRF);
-    let audioBitrate = '128k';
+    let audioBitrate = this.AUDIO_BITRATE;
     
     // if we can estimate size ratio based on source file
     if (metadata.size && metadata.size > 0) {
@@ -322,23 +322,18 @@ export class MediaProcessor {
       if (compressionRatio < 0.2) {
         // need extreme compression
         crf = 32;
-        audioBitrate = '96k';
       } else if (compressionRatio < 0.4) {
         // need high compression
         crf = 30;
-        audioBitrate = '112k';
       } else if (compressionRatio < 0.6) {
         // need moderate compression
         crf = 28;
-        audioBitrate = '128k';
       } else if (compressionRatio < 0.8) {
         // need light compression
         crf = 26;
-        audioBitrate = '128k';
       } else {
         // need minimal compression
         crf = 23;
-        audioBitrate = '128k';
       }
     }
     
