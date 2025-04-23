@@ -206,7 +206,7 @@ export class MediaProcessor {
     let resolutionIndex = 0; // start with highest resolution
     let audioBitrateNum = parseInt(audioBitrate.replace('k', ''));
     let attempt = 1;
-    const maxAttempts = 10;
+    const maxAttempts = 7;
     let mp3Quality = this.isLargeFile(metadata.size) ? 5 : 2; // for audio files
     let opusQuality = this.isLargeFile(metadata.size) ? 5 : 3; // for video audio (1-10 scale, lower=better)
     
@@ -214,6 +214,10 @@ export class MediaProcessor {
     if (metadata.size && metadata.size > 30 * 1024 * 1024) { // >30MB
       console.log(`extremely large file (${Math.round(metadata.size/1024/1024)}MB), starting with more aggressive settings`);
       crf += 10; // much higher compression
+      // if crf is > 50, set to 50
+      if (crf > this.MAX_NVENC_CRF) {
+        crf = this.MAX_NVENC_CRF;
+      }
       resolutionIndex = 1; // start with 640x360
       audioBitrateNum = 128; // start with minimum
       mp3Quality = 5; // worse quality for audio
@@ -257,6 +261,9 @@ export class MediaProcessor {
               // for video: first try increasing crf before dropping resolution
               if (attempt % 2 === 1) {
                 crf += 4; // increase CRF (higher = more compression)
+                if (crf > this.MAX_NVENC_CRF) {
+                  crf = this.MAX_NVENC_CRF; // cap at max
+                }
                 opusQuality = Math.min(10, opusQuality + 1); // worse audio quality (1-10)
               } else {
                 // only drop resolution every other attempt, and only if we haven't reached minimum
@@ -476,39 +483,6 @@ export class MediaProcessor {
         .run()
     })
   }
-  
-  private async extractAudioOnly(
-    inputPath: string,
-    outputPath: string,
-    volAdjustment: number
-  ): Promise<void> {
-    // change output extension to mp3
-    const mp3Path = outputPath.replace(/\.[^.]+$/, '.mp3')
-    
-    return new Promise((resolve, reject) => {
-      const processTimeout = setTimeout(() => {
-        reject(new Error(`audio extraction timed out for: ${inputPath}`))
-      }, 180000) // 3 minutes timeout
-      
-      console.log(`extracting audio only with high compression (last resort)`)
-      
-      ffmpeg(inputPath)
-        .audioFilters(`volume=${volAdjustment}dB`)
-        .noVideo() // skip video stream
-        .outputOptions('-c:a libmp3lame')
-        .outputOptions('-q:a 7') // low quality but small size
-        .output(mp3Path)
-        .on('error', (err) => {
-          clearTimeout(processTimeout)
-          reject(new Error(`audio extraction failed: ${err.message}`))
-        })
-        .on('end', () => {
-          clearTimeout(processTimeout)
-          resolve()
-        })
-        .run()
-    })
-  }
 
   private async trimVideoToMaxDuration(
     inputPath: string,
@@ -529,12 +503,12 @@ export class MediaProcessor {
         .outputOptions('-ss 0') // start from beginning
         .outputOptions(`-t ${this.MAX_VIDEO_DURATION_MS/1000}`) // set max duration
         .outputOptions('-c:v libx264') // use reliable software encoder
-        .outputOptions('-crf 48') // very high compression
-        .outputOptions('-preset faster') // faster encoding
+        .outputOptions('-crf 32') // very high compression
+        .outputOptions('-preset slow') // faster encoding
         .outputOptions('-pix_fmt yuv420p')
-        .outputOptions('-vf scale=480:270') // force to low res
+        .outputOptions('-vf scale=640:360') // force to low res
         .outputOptions('-c:a libmp3lame') // mp3 audio instead of opus
-        .outputOptions('-q:a 8') // low audio quality
+        .outputOptions('-q:a 5') // low audio quality
         .output(outputPath)
         .on('error', (err) => {
           clearTimeout(processTimeout)
