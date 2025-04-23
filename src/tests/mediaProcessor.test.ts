@@ -25,15 +25,31 @@ jest.mock('fluent-ffmpeg', () => {
   }
   
   const ffmpegMock = jest.fn().mockReturnValue(mockFfmpegInstance)
+  
+  // mock the ffprobe function to return different metadata for different file types
   ;(ffmpegMock as any).ffprobe = jest.fn().mockImplementation((filePath: string, callback: any) => {
-    // return different durations for different file types to test conversion logic
     const ext = path.extname(filePath).toLowerCase()
     const duration = ext === '.webm' || ext === '.mkv' || ext === '.m4a' ? 45.5 : 30.5
     
-    callback(null, {
-      format: { duration }
-    })
+    // return video stream data for video files, audio only for mp3
+    if (ext === '.mp3') {
+      callback(null, {
+        format: { duration },
+        streams: [
+          { codec_type: 'audio' }
+        ]
+      })
+    } else {
+      callback(null, {
+        format: { duration },
+        streams: [
+          { codec_type: 'video', width: 1920, height: 1080 },
+          { codec_type: 'audio' }
+        ]
+      })
+    }
   })
+  
   return ffmpegMock
 })
 
@@ -72,37 +88,38 @@ describe('MediaProcessor', () => {
     // duration should match the mock
     expect(result.duration).toBe(45500) // 45.5 seconds in ms
     
-    // ffmpeg should be called with correct options for conversion
+    // ffmpeg should be called with correct options for video conversion
     const ffmpeg = require('fluent-ffmpeg')
     const mockFfmpeg = jest.mocked(ffmpeg)
     expect(mockFfmpeg).toHaveBeenCalledWith(inputPath)
     
-    // check if outputOptions was called for format conversion
+    // check if video outputOptions were called
     const mockInstance = mockFfmpeg.mock.results[0].value
     expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:v libx264')
     expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:a aac')
   })
   
-  test('should normalize mp3 without converting format', async () => {
+  test('should normalize mp3 and keep mp3 format', async () => {
     const inputPath = '/path/to/file.mp3'
     const outputDir = '/output/dir'
     
     const result = await mediaProcessor.normalizeAndConvert(inputPath, outputDir)
     
-    // should keep original extension
+    // should keep mp3 extension for audio files
     expect(result.outputPath.endsWith('.mp3')).toBe(true)
     
     // duration should match the mock
     expect(result.duration).toBe(30500) // 30.5 seconds in ms
     
-    // ffmpeg should be called with correct options
+    // ffmpeg should be called with correct options for audio
     const ffmpeg = require('fluent-ffmpeg')
     const mockFfmpeg = jest.mocked(ffmpeg)
     expect(mockFfmpeg).toHaveBeenCalledWith(inputPath)
     
-    // check that outputOptions was not called for format conversion
+    // check that audio-specific output options were used
     const mockInstance = mockFfmpeg.mock.results[0].value
-    expect(mockInstance.outputOptions).not.toHaveBeenCalled()
+    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-c:a libmp3lame')
+    expect(mockInstance.outputOptions).toHaveBeenCalledWith('-b:a 192k')
   })
   
   test('should use mediaId in filename when provided', async () => {

@@ -9,11 +9,20 @@ interface MediaItemToProcess {
   duration?: number
 }
 
+interface MediaMetadata {
+  hasVideo: boolean
+  duration: number
+  width?: number
+  height?: number
+}
+
 export class MediaProcessor {
   private static instance: MediaProcessor
   private TARGET_VOLUME = -3 // target peak volume in dB
-  private supportedOutputFormats = ['mp4']
-  private formatsToConvert = ['.webm', '.mkv', '.m4a']
+  private AUDIO_BITRATE = '192k'
+  private VIDEO_CRF = '22'
+  private MAX_WIDTH = 1280
+  private MAX_HEIGHT = 720
 
   private constructor() {}
 
@@ -26,11 +35,10 @@ export class MediaProcessor {
 
   private async isValidMediaFile(filePath: string): Promise<boolean> {
     return new Promise((resolve) => {
-      // set a timeout to prevent hanging on corrupt files
       const timeout = setTimeout(() => {
         console.error(`validation timed out for: ${filePath}`)
         resolve(false)
-      }, 15000) // 15 second timeout
+      }, 15000)
       
       ffmpeg.ffprobe(filePath, (err, metadata) => {
         clearTimeout(timeout)
@@ -52,6 +60,43 @@ export class MediaProcessor {
     })
   }
 
+  private async getMediaMetadata(filePath: string): Promise<MediaMetadata> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`metadata analysis timed out for: ${filePath}`))
+      }, 15000)
+      
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        clearTimeout(timeout)
+        
+        if (err) {
+          reject(new Error(`failed to analyze metadata: ${err.message}`))
+          return
+        }
+        
+        const duration = Math.floor((metadata?.format?.duration || 0) * 1000)
+        
+        // check if there's a video stream
+        const videoStream = metadata?.streams?.find(stream => stream.codec_type === 'video' && 
+          !stream.disposition?.attached_pic) // exclude cover art
+        
+        if (videoStream) {
+          resolve({
+            hasVideo: true,
+            duration,
+            width: videoStream.width,
+            height: videoStream.height
+          })
+        } else {
+          resolve({
+            hasVideo: false,
+            duration
+          })
+        }
+      })
+    })
+  }
+
   public async normalizeAndConvert(inputPath: string, outputDir: string, mediaId?: number): Promise<{
     outputPath: string
     duration: number
@@ -66,104 +111,104 @@ export class MediaProcessor {
       throw new Error(`corrupt or invalid media file: ${inputPath}`)
     }
 
-    const originalExt = path.extname(inputPath).toLowerCase()
-    const baseName = path.basename(inputPath, originalExt)
-    const finalExt = this.shouldConvertFormat(originalExt) ? '.mp4' : originalExt
-    const outputFileName = mediaId ? `norm_${mediaId}${finalExt}` : `norm_${Date.now()}_${baseName}${finalExt}`
+    // get detailed metadata about the media
+    const metadata = await this.getMediaMetadata(inputPath)
+    
+    // determine output format based on content (mp4 for video, mp3 for audio-only)
+    const outputExt = metadata.hasVideo ? '.mp4' : '.mp3'
+    const baseName = path.basename(inputPath, path.extname(inputPath))
+    const outputFileName = mediaId ? `norm_${mediaId}${outputExt}` : `norm_${Date.now()}_${baseName}${outputExt}`
     const outputPath = path.join(outputDir, outputFileName)
 
     try {
       // analyze volume
-      const { maxVolume, duration } = await this.analyzeMedia(inputPath)
+      const { maxVolume } = await this.analyzeVolume(inputPath)
       const adjustment = this.TARGET_VOLUME - maxVolume
 
-      // normalize volume and convert format if needed
-      await this.processMedia(inputPath, outputPath, adjustment, this.shouldConvertFormat(originalExt))
+      // process media with all our parameters
+      await this.processMedia(inputPath, outputPath, adjustment, metadata)
 
-      return { outputPath, duration }
+      return { outputPath, duration: metadata.duration }
     } catch (err) {
       console.error(`failed processing media: ${err}`)
       throw err
     }
   }
 
-  private shouldConvertFormat(extension: string): boolean {
-    return this.formatsToConvert.includes(extension.toLowerCase())
-  }
-
-  private async analyzeMedia(filePath: string): Promise<{ maxVolume: number, duration: number }> {
+  private async analyzeVolume(filePath: string): Promise<{ maxVolume: number }> {
     return new Promise((resolve, reject) => {
-      // timeout for getting duration
-      const durationTimeout = setTimeout(() => {
-        reject(new Error(`ffprobe duration analysis timed out for: ${filePath}`))
-      }, 15000) // 15 second timeout
+      const volumeTimeout = setTimeout(() => {
+        reject(new Error(`volume analysis timed out for: ${filePath}`))
+      }, 20000)
       
-      // first get duration
-      ffmpeg.ffprobe(filePath, (err, metadata) => {
-        clearTimeout(durationTimeout)
-        
-        if (err) {
-          reject(new Error(`failed to analyze media: ${err.message}`))
-          return
-        }
+      ffmpeg(filePath)
+        .audioFilters('volumedetect')
+        .format('null')
+        .output('/dev/null')
+        .on('error', (err) => {
+          clearTimeout(volumeTimeout)
+          reject(new Error(`volume analysis failed: ${err.message}`))
+        })
+        .on('end', (stdout, stderr) => {
+          clearTimeout(volumeTimeout)
+          
+          if (!stderr) {
+            console.error('no stderr output from ffmpeg volume analysis, using default volume')
+            resolve({ maxVolume: this.TARGET_VOLUME })
+            return
+          }
 
-        const duration = Math.floor((metadata?.format?.duration || 0) * 1000)
+          const match = stderr.match(/max_volume: ([-\d.]+) dB/)
+          if (!match || !match[1]) {
+            console.error(`could not detect volume level for ${filePath}, using default volume`)
+            resolve({ maxVolume: this.TARGET_VOLUME })
+            return
+          }
 
-        // timeout for volume analysis
-        const volumeTimeout = setTimeout(() => {
-          reject(new Error(`volume analysis timed out for: ${filePath}`))
-        }, 20000) // 20 second timeout
-        
-        // then analyze volume
-        ffmpeg(filePath)
-          .audioFilters('volumedetect')
-          .format('null')
-          .output('/dev/null')
-          .on('error', (err) => {
-            clearTimeout(volumeTimeout)
-            reject(new Error(`volume analysis failed: ${err.message}`))
-          })
-          .on('end', (stdout, stderr) => {
-            clearTimeout(volumeTimeout)
-            
-            if (!stderr) {
-              console.error('no stderr output from ffmpeg volume analysis, using default volume')
-              resolve({ maxVolume: this.TARGET_VOLUME, duration })
-              return
-            }
-
-            const match = stderr.match(/max_volume: ([-\d.]+) dB/)
-            if (!match || !match[1]) {
-              console.error(`could not detect volume level for ${filePath}, using default volume`)
-              resolve({ maxVolume: this.TARGET_VOLUME, duration })
-              return
-            }
-
-            const maxVolume = parseFloat(match[1])
-            resolve({ maxVolume, duration })
-          })
-          .run()
-      })
+          const maxVolume = parseFloat(match[1])
+          resolve({ maxVolume })
+        })
+        .run()
     })
   }
 
-  private async processMedia(inputPath: string, outputPath: string, volAdjustment: number, convertFormat: boolean): Promise<void> {
+  private async processMedia(
+    inputPath: string, 
+    outputPath: string, 
+    volAdjustment: number, 
+    metadata: MediaMetadata
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
-      // timeout for processing - longer since conversion can take time
       const processTimeout = setTimeout(() => {
         reject(new Error(`processing timed out for: ${inputPath}`))
       }, 300000) // 5 minutes timeout
       
-      let command = ffmpeg(inputPath).audioFilters(`volume=${volAdjustment}dB`)
-
-      if (convertFormat) {
-        // for format conversion, ensure we use good settings
+      let command = ffmpeg(inputPath)
+        .audioFilters(`volume=${volAdjustment}dB`)
+      
+      if (metadata.hasVideo) {
+        // video output (mp4)
         command = command
-          .outputOptions('-c:v libx264') // video codec
-          .outputOptions('-crf 23')      // quality
-          .outputOptions('-preset fast') // encoding speed/compression balance
-          .outputOptions('-c:a aac')     // audio codec
-          .outputOptions('-b:a 128k')    // audio bitrate
+          .outputOptions('-c:v libx264')        // video codec (h264)
+          .outputOptions(`-crf ${this.VIDEO_CRF}`)  // quality (lower = better)
+          .outputOptions('-preset fast')        // encoding speed vs compression
+          .outputOptions('-pix_fmt yuv420p')    // pixel format for compatibility
+          .outputOptions(`-b:a ${this.AUDIO_BITRATE}`) // audio bitrate
+          .outputOptions('-c:a aac')            // audio codec
+          
+        // scale video if needed while maintaining aspect ratio
+        if (metadata.width && metadata.height) {
+          if (metadata.width > this.MAX_WIDTH || metadata.height > this.MAX_HEIGHT) {
+            command = command.outputOptions(
+              `-vf scale=w='min(${this.MAX_WIDTH},iw)':h='min(${this.MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`
+            )
+          }
+        }
+      } else {
+        // audio-only output (mp3)
+        command = command
+          .outputOptions('-c:a libmp3lame')     // mp3 codec
+          .outputOptions(`-b:a ${this.AUDIO_BITRATE}`) // audio bitrate
       }
 
       command

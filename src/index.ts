@@ -16,6 +16,7 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import { DatabaseManager } from './database/databaseManager';
 import { startServer } from './web/server';
+import { ChatCommandHandler } from './utils/chatCommandHandler';
 
 dotenv.config();
 
@@ -296,6 +297,12 @@ async function main() {
         }
       }
     }
+  });
+
+  // handle chat messages for ..o command
+  client.on(Events.MessageCreate, async (message) => {
+    const chatCommandHandler = ChatCommandHandler.getInstance();
+    await chatCommandHandler.handleMessage(message);
   });
 
   // login

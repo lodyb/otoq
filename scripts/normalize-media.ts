@@ -106,7 +106,7 @@ async function deleteMediaFromDb(db: DatabaseManager, mediaId: number): Promise<
 }
 
 async function normalizeAllMedia() {
-  console.log('starting media normalization and conversion script...')
+  console.log('starting media normalization and conversion script... (⌐■_■)')
   
   // initialize database
   const dbManager = DatabaseManager.getInstance()
@@ -141,11 +141,11 @@ async function normalizeAllMedia() {
     }
     
     if (corruptCount > 0) {
-      console.log(`cleaned up ${corruptCount} corrupt files`)
+      console.log(`cleaned up ${corruptCount} corrupt files (ノ｀Д´)ノ︵`)
       // reload media list after cleanup
       allMedia.splice(0, allMedia.length, ...await getAllMedia(dbManager))
     } else {
-      console.log('no corrupt files found')
+      console.log('no corrupt files found (・ω・)b')
     }
   }
   
@@ -156,10 +156,12 @@ async function normalizeAllMedia() {
       const forceReprocess = process.argv.includes('--force')
       
       if (media.normalized_path && fs.existsSync(media.normalized_path) && !forceReprocess) {
-        // check if we need to convert the format even though it's already normalized
+        // check if we need to convert specific formats anyway
         const ext = path.extname(media.normalized_path).toLowerCase()
-        if (['.webm', '.mkv', '.m4a'].includes(ext)) {
-          console.log(`media #${media.id} needs format conversion from ${ext} to mp4`)
+        
+        // we now want to convert any non-standard format (not mp4/mp3)
+        if (!['.mp4', '.mp3'].includes(ext)) {
+          console.log(`media #${media.id} needs format conversion from ${ext} to mp4/mp3`)
           return true
         }
         
@@ -182,7 +184,7 @@ async function normalizeAllMedia() {
       duration: undefined
     }))
   
-  console.log(`processing ${mediaToProcess.length} media files...`)
+  console.log(`processing ${mediaToProcess.length} media files... (｡•̀ᴗ-)✧`)
   
   // batch process all media files
   if (mediaToProcess.length > 0) {
@@ -213,7 +215,7 @@ async function normalizeAllMedia() {
       })
     }
   } else {
-    console.log('no media files need processing')
+    console.log('no media files need processing (≧ω≦)')
   }
   
   console.log('normalization complete (⌐■_■)')

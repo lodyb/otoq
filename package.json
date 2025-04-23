@@ -12,6 +12,7 @@
     "migrate": "ts-node migrate.ts",
     "scheduler": "ts-node scripts/scheduler.ts",
     "normalize": "ts-node scripts/normalize-media.ts",
+    "normalize-media": "ts-node scripts/normalize-media.ts",
     "cleanup-corrupt": "ts-node scripts/normalize-media.ts --cleanup-corrupt"
   },
   "keywords": [
