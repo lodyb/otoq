@@ -58,7 +58,8 @@ jest.mock('fs', () => ({
   mkdirSync: jest.fn(),
   writeFileSync: jest.fn(),
   readFileSync: jest.fn().mockReturnValue('{}'),
-  unlinkSync: jest.fn()
+  unlinkSync: jest.fn(),
+  statSync: jest.fn().mockReturnValue({ size: 1024 * 1024 }) // mock 1MB file size
 }))
 
 describe('MediaProcessor', () => {
