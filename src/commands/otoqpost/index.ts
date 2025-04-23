@@ -55,13 +55,16 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
   
-  if (!fs.existsSync(media.file_path)) {
+  // prefer normalized path if available
+  const filePath = media.normalized_path || media.file_path;
+  
+  if (!fs.existsSync(filePath)) {
     await interaction.editReply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`);
     return;
   }
   
   try {
-    const attachment = new AttachmentBuilder(media.file_path, { name: path.basename(media.file_path) });
+    const attachment = new AttachmentBuilder(filePath, { name: path.basename(filePath) });
     await interaction.editReply({ files: [attachment] });
   } catch (error) {
     console.error('error posting media:', error);

@@ -1,6 +1,7 @@
 import { 
   Message, 
-  AttachmentBuilder
+  AttachmentBuilder,
+  ChannelType
 } from 'discord.js';
 import { DatabaseManager } from '../database/databaseManager';
 import { GameManager } from './gameManager';
@@ -47,7 +48,20 @@ export class ChatCommandHandler {
       
       // get game manager and find active session
       const gameManager = GameManager.getInstance();
-      const session = gameManager.getSession(guildId, channelId, message.channel);
+      
+      // typescript is mad because message.channel can be many types
+      // but getSession only accepts TextChannel or ThreadChannel
+      // so only pass the channel if it's the right type
+      const isValidChannel = 
+        message.channel.type === ChannelType.GuildText || 
+        message.channel.type === ChannelType.PublicThread ||
+        message.channel.type === ChannelType.PrivateThread;
+      
+      const session = gameManager.getSession(
+        guildId, 
+        channelId, 
+        isValidChannel ? message.channel : undefined
+      );
       
       if (!session) {
         await message.reply(`no active game session in this channel (｡•́︿•̀｡)`);
@@ -71,15 +85,18 @@ export class ChatCommandHandler {
         return;
       }
       
+      // prefer normalized path if available
+      const filePath = prevMedia.normalized_path || prevMedia.file_path;
+      
       // check if file exists
-      if (!fs.existsSync(prevMedia.file_path)) {
+      if (!fs.existsSync(filePath)) {
         await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${prevMedia.id}`);
         return;
       }
       
       // post the file
       try {
-        const attachment = new AttachmentBuilder(prevMedia.file_path, { name: path.basename(prevMedia.file_path) });
+        const attachment = new AttachmentBuilder(filePath, { name: path.basename(filePath) });
         await message.reply({ content: `previous song from round ${session.getCurrentRound()-1} (￣▽￣)`, files: [attachment] });
       } catch (error) {
         console.error('error posting media:', error);
@@ -102,8 +119,6 @@ export class ChatCommandHandler {
       // if no search term, just ignore
       if (!searchTerm) return;
       
-      // typing indicator removed - was causing typescript errors
-      
       // search for media with matching title
       const db = DatabaseManager.getInstance();
       const mediaItems = await db.getMediaByTitle(searchTerm);
@@ -116,15 +131,18 @@ export class ChatCommandHandler {
       // use the first (best) match
       const media = mediaItems[0];
       
+      // prefer normalized path if available
+      const filePath = media.normalized_path || media.file_path;
+      
       // check if file exists
-      if (!fs.existsSync(media.file_path)) {
+      if (!fs.existsSync(filePath)) {
         await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`);
         return;
       }
       
       // post the file
       try {
-        const attachment = new AttachmentBuilder(media.file_path, { name: path.basename(media.file_path) });
+        const attachment = new AttachmentBuilder(filePath, { name: path.basename(filePath) });
         await message.reply({ files: [attachment] });
       } catch (error) {
         console.error('error posting media:', error);
