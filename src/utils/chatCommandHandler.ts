@@ -116,15 +116,19 @@ export class ChatCommandHandler {
       // extract search term (everything after the prefix and a space)
       const searchTerm = message.content.slice(this.PREFIX.length).trim();
       
-      // if no search term, just ignore
-      if (!searchTerm) return;
-      
-      // search for media with matching title
       const db = DatabaseManager.getInstance();
-      const mediaItems = await db.getMediaByTitle(searchTerm);
+      let mediaItems = [];
+      
+      // if no search term, get random media
+      if (!searchTerm) {
+        mediaItems = await db.getRandomMedia(undefined, undefined, undefined, 1);
+      } else {
+        // search for media with matching title
+        mediaItems = await db.getMediaByTitle(searchTerm);
+      }
       
       if (mediaItems.length === 0) {
-        await message.reply(`no media found matching "${searchTerm}" (￣︿￣)`);
+        await message.reply(`no media found ${searchTerm ? `matching "${searchTerm}"` : ""} (￣︿￣)`);
         return;
       }
       

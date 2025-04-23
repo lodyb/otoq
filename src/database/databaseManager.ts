@@ -334,18 +334,52 @@ export class DatabaseManager {
   }
 
   public async getMediaByTitle(title: string): Promise<any[]> {
-    const searchPattern = `%${title}%`;
+    // normalize the search term for proper matching
+    const normalizedSearchTerm = this.normalizeString(title)
+    const searchPattern = `%${title}%`
     
     return new Promise((resolve, reject) => {
+      // first try to find exact matches - case insensitive
       this.db.all(
-        'SELECT * FROM media WHERE title LIKE ? ORDER BY title LIMIT 10',
-        [searchPattern],
-        (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows);
+        `SELECT * FROM media 
+         WHERE LOWER(title) = LOWER(?) 
+         ORDER BY title LIMIT 10`,
+        [title],
+        (err, exactRows) => {
+          if (err) {
+            reject(err)
+            return
+          }
+          
+          // if we found exact matches return them first
+          if (exactRows && exactRows.length > 0) {
+            resolve(exactRows)
+            return
+          }
+          
+          // otherwise do a fuzzy search as fallback
+          this.db.all(
+            `SELECT * FROM media 
+             WHERE title LIKE ? 
+             ORDER BY 
+               CASE 
+                 WHEN LOWER(title) LIKE LOWER(?) THEN 0
+                 ELSE 1
+               END,
+               LENGTH(title), title 
+             LIMIT 10`,
+            [searchPattern, `${title}%`],
+            (err, fuzzyRows) => {
+              if (err) {
+                reject(err)
+                return
+              }
+              resolve(fuzzyRows)
+            }
+          )
         }
-      );
-    });
+      )
+    })
   }
 
   public async checkAnswer(mediaId: number, userAnswer: string): Promise<{correct: boolean, close: boolean}> {
