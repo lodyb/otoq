@@ -20,6 +20,7 @@ export class GameSession {
   private totalRounds: number;
   private guessedAnswers: Set<number>; // track which media ids have been guessed
   private clipMode: boolean;
+  private lastPlayedMediaId: number | null = null;
 
   constructor(id: number, guildId: string, channelId: string, playlist: MediaItem[], totalRounds: number, clipMode: boolean = false) {
     this.id = id;
@@ -61,7 +62,17 @@ export class GameSession {
     return this.playlist[this.currentRound - 1];
   }
 
+  public getPreviousMediaId(): number | null {
+    return this.lastPlayedMediaId;
+  }
+
   public nextRound(): MediaItem | undefined {
+    // save current media id before advancing
+    const currentMedia = this.getCurrentMedia();
+    if (currentMedia) {
+      this.lastPlayedMediaId = currentMedia.id;
+    }
+    
     // reset skip votes for new round
     this.skipVotes.clear();
     

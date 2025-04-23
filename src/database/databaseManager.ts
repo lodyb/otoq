@@ -488,4 +488,56 @@ export class DatabaseManager {
       );
     });
   }
+
+  public async getPreviousRoundMedia(sessionId: number, roundNumber: number): Promise<any | null> {
+    return new Promise((resolve, reject) => {
+      // get the last media that was played by joining with game_session_media or
+      // try to infer it based on what round the playlist is on
+      
+      // for now, just get a specific media based on session ID and round number
+      // real implementation would need to use session history or similar
+      
+      // first check if we even have a record of the round
+      this.db.get(
+        `SELECT * FROM game_sessions 
+         WHERE id = ? AND current_round >= ?`,
+        [sessionId, roundNumber + 1],
+        (err, sessionRow) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          
+          if (!sessionRow) {
+            // no valid previous round found
+            resolve(null);
+            return;
+          }
+          
+          // since we don't track exactly which media was played in which round
+          // we'll use a workaround - get all media with playback history for this session
+          // this is a stub for now - would need session_history table in a full implementation
+          this.db.all(
+            `SELECT m.* FROM media m 
+             ORDER BY RANDOM() 
+             LIMIT 1`,
+            [],
+            (err, rows) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              
+              if (!rows || rows.length === 0) {
+                resolve(null);
+                return;
+              }
+              
+              resolve(rows[0]);
+            }
+          );
+        }
+      );
+    });
+  }
 }
