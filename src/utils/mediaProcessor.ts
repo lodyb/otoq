@@ -293,19 +293,19 @@ export class MediaProcessor {
       attempt++;
     }
     
-    // if all attempts fail and we have a video file, try last resort mode - audio only
-    if (metadata.hasVideo && metadata.size && metadata.size > 15 * 1024 * 1024) {
-      console.log("all video attempts failed - trying audio-only extraction as last resort");
-      try {
-        await this.extractAudioOnly(inputPath, outputPath, volAdjustment);
-        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size <= this.MAX_FILE_SIZE_BYTES) {
-          console.log(`successful audio-only extraction, size: ${Math.round(fs.statSync(outputPath).size/1024/1024)}MB`);
-          return;
-        }
-      } catch (err) {
-        console.error(`audio extraction failed too: ${err}`);
-      }
-    }
+    // // if all attempts fail and we have a video file, try last resort mode - audio only
+    // if (metadata.hasVideo && metadata.size && metadata.size > 15 * 1024 * 1024) {
+    //   console.log("all video attempts failed - trying audio-only extraction as last resort");
+    //   try {
+    //     await this.extractAudioOnly(inputPath, outputPath, volAdjustment);
+    //     if (fs.existsSync(outputPath) && fs.statSync(outputPath).size <= this.MAX_FILE_SIZE_BYTES) {
+    //       console.log(`successful audio-only extraction, size: ${Math.round(fs.statSync(outputPath).size/1024/1024)}MB`);
+    //       return;
+    //     }
+    //   } catch (err) {
+    //     console.error(`audio extraction failed too: ${err}`);
+    //   }
+    // }
     
     // if all attempts fail and we have a video file, try last resort mode - trim video to max duration
     if (metadata.hasVideo && metadata.duration && metadata.duration > this.MAX_VIDEO_DURATION_MS) {
