@@ -202,7 +202,7 @@ export class MediaProcessor {
     let currentHeight = this.MAX_HEIGHT;
     let audioBitrateNum = parseInt(audioBitrate.replace('k', ''));
     let attempt = 1;
-    const maxAttempts = 5;
+    const maxAttempts = 10; // increased from 5 to 10
     
     while (attempt <= maxAttempts) {
       console.log(`compression attempt ${attempt}/${maxAttempts}: crf=${crf}, resolution=${currentWidth}x${currentHeight}, audioBitrate=${audioBitrateNum}k`);
