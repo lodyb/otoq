@@ -25,8 +25,8 @@ export class MediaProcessor {
   private VIDEO_CRF = '22'
   private MAX_WIDTH = 1280
   private MAX_HEIGHT = 720
-  private MAX_FILE_SIZE_BYTES = 8.5 * 1024 * 1024 
-  private USE_HARDWARE_ACCEL = true // enable nvidia encoding
+  private MAX_FILE_SIZE_BYTES = 9 * 1024 * 1024
+  private USE_HARDWARE_ACCEL = true
 
   private constructor() {}
 
@@ -193,55 +193,66 @@ export class MediaProcessor {
     metadata: MediaMetadata
   ): Promise<void> {
     // calculate optimal encoding settings based on source media
-    const { crf, audioBitrate } = this.calculateCompressionSettings(metadata);
+    let { crf, audioBitrate } = this.calculateCompressionSettings(metadata);
     
     console.log(`processing ${path.basename(inputPath)} - ${metadata.hasVideo ? 'video' : 'audio'} file`);
     console.log(`source: ${metadata.size ? Math.round(metadata.size/1024/1024) + 'MB' : 'unknown size'}, ${metadata.duration}ms duration`);
-    console.log(`settings: ${metadata.hasVideo ? `crf=${crf}, ` : ''}audioBitrate=${audioBitrate}`);
     
-    // first try with calculated settings
-    try {
-      await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate);
+    let currentWidth = this.MAX_WIDTH;
+    let currentHeight = this.MAX_HEIGHT;
+    let audioBitrateNum = parseInt(audioBitrate.replace('k', ''));
+    let attempt = 1;
+    const maxAttempts = 5;
+    
+    while (attempt <= maxAttempts) {
+      console.log(`compression attempt ${attempt}/${maxAttempts}: crf=${crf}, resolution=${currentWidth}x${currentHeight}, audioBitrate=${audioBitrateNum}k`);
       
-      // verify file size
-      if (fs.existsSync(outputPath)) {
-        const stats = fs.statSync(outputPath);
-        console.log(`output size: ${Math.round(stats.size/1024/1024)}MB`);
+      try {
+        // run ffmpeg with current settings
+        await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, `${audioBitrateNum}k`, currentWidth, currentHeight);
         
-        if (stats.size <= this.MAX_FILE_SIZE_BYTES) {
-          return; // success!
-        }
-        
-        console.log(`output still too large, using emergency compression`);
-        
-        // emergency compression with more aggressive settings
-        if (metadata.hasVideo) {
-          // use extreme settings for video
-          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 35, this.AUDIO_BITRATE);
-        } else {
-          // use minimum bitrate for audio
-          await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, 0, this.AUDIO_BITRATE);
-        }
-        
-        // check size again
+        // check if result is small enough
         if (fs.existsSync(outputPath)) {
-          const finalStats = fs.statSync(outputPath);
-          console.log(`final size: ${Math.round(finalStats.size/1024/1024)}MB`);
+          const stats = fs.statSync(outputPath);
+          const sizeMB = Math.round(stats.size/1024/1024);
+          console.log(`output size: ${sizeMB}MB`);
           
-          if (finalStats.size <= this.MAX_FILE_SIZE_BYTES) {
-            return; // success with emergency compression
+          if (stats.size <= this.MAX_FILE_SIZE_BYTES) {
+            return; // success!
           }
           
-          throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit even with emergency settings`);
+          // not small enough yet, adjust settings for next attempt
+          if (attempt < maxAttempts) {
+            console.log(`still too large (${sizeMB}MB), trying more aggressive settings...`);
+            
+            // increase compression for next attempt
+            if (metadata.hasVideo) {
+              // for video: more extreme settings with each attempt
+              crf += 5; // increase CRF (higher = more compression)
+              currentWidth = Math.floor(currentWidth * 0.8); // reduce resolution
+              currentHeight = Math.floor(currentHeight * 0.8);
+              audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.5)); // reduce audio quality
+            } else {
+              // for audio: reduce bitrate more aggressively
+              audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.5));
+            }
+          }
         }
+      } catch (err) {
+        console.error(`attempt ${attempt} failed: ${err}`);
+        // try again with more aggressive settings if not the last attempt
+        if (attempt >= maxAttempts) throw err;
+        
+        crf += 5;
+        audioBitrateNum = Math.max(24, Math.floor(audioBitrateNum * 0.7));
+        currentWidth = Math.floor(currentWidth * 0.7);
+        currentHeight = Math.floor(currentHeight * 0.7);
       }
-    } catch (err) {
-      // if file exists but encoding failed, remove it
-      if (fs.existsSync(outputPath)) {
-        fs.unlinkSync(outputPath);
-      }
-      throw err;
+      
+      attempt++;
     }
+    
+    throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit after ${maxAttempts} attempts`);
   }
   
   private async runFfmpeg(
@@ -250,7 +261,9 @@ export class MediaProcessor {
     volAdjustment: number,
     metadata: MediaMetadata,
     crf: number, 
-    audioBitrate: string
+    audioBitrate: string,
+    width: number,
+    height: number
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const processTimeout = setTimeout(() => {
@@ -265,7 +278,7 @@ export class MediaProcessor {
         let useHwAccel = this.USE_HARDWARE_ACCEL
         
         // scale video to max resolution while maintaining aspect ratio
-        const scaleFilter = `scale=w='min(${this.MAX_WIDTH},iw)':h='min(${this.MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`
+        const scaleFilter = `scale=w='min(${width},iw)':h='min(${height},ih)':force_original_aspect_ratio=decrease`
         
         if (useHwAccel) {
           try {
@@ -317,7 +330,7 @@ export class MediaProcessor {
             const origHwAccel = this.USE_HARDWARE_ACCEL
             this.USE_HARDWARE_ACCEL = false
             
-            this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate)
+            this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, crf, audioBitrate, width, height)
               .then(() => {
                 // restore original setting and resolve
                 this.USE_HARDWARE_ACCEL = origHwAccel
@@ -374,16 +387,16 @@ export class MediaProcessor {
       // the relationship isn't linear but this gives us a starting point
       if (compressionRatio < 0.2) {
         // need extreme compression
-        crf = 32;
+        crf = 42;
       } else if (compressionRatio < 0.4) {
         // need high compression
-        crf = 30;
+        crf = 36;
       } else if (compressionRatio < 0.6) {
         // need moderate compression
-        crf = 28;
+        crf = 32;
       } else if (compressionRatio < 0.8) {
         // need light compression
-        crf = 26;
+        crf = 28;
       } else {
         // need minimal compression
         crf = 23;
