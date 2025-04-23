@@ -23,6 +23,7 @@ export class MediaProcessor {
   private VIDEO_CRF = '22'
   private MAX_WIDTH = 1280
   private MAX_HEIGHT = 720
+  private MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024 // 8MB max for discord
 
   private constructor() {}
 
@@ -178,6 +179,58 @@ export class MediaProcessor {
     volAdjustment: number, 
     metadata: MediaMetadata
   ): Promise<void> {
+    // start with normal quality settings
+    let currentCrf = Number(this.VIDEO_CRF)
+    let currentAudioBitrate = this.AUDIO_BITRATE
+    let attemptCount = 0
+    const maxAttempts = 3
+    
+    while (attemptCount < maxAttempts) {
+      attemptCount++
+      
+      try {
+        await this.runFfmpeg(inputPath, outputPath, volAdjustment, metadata, currentCrf, currentAudioBitrate)
+        
+        // check output file size
+        if (fs.existsSync(outputPath)) {
+          const stats = fs.statSync(outputPath)
+          
+          if (stats.size <= this.MAX_FILE_SIZE_BYTES) {
+            // success - file is under size limit
+            return
+          }
+          
+          console.log(`output too large (${Math.round(stats.size/1024/1024)}MB), retrying with higher compression...`)
+          
+          // increase compression for next attempt
+          if (metadata.hasVideo) {
+            // for video: increase CRF (lower quality = smaller file)
+            currentCrf += 4
+          } else {
+            // for audio: reduce bitrate
+            const currentBitrateNum = parseInt(currentAudioBitrate.replace('k', ''))
+            const newBitrate = Math.max(96, currentBitrateNum - 64) // min 96kbps
+            currentAudioBitrate = `${newBitrate}k`
+          }
+        }
+      } catch (err) {
+        // if final attempt, rethrow
+        if (attemptCount >= maxAttempts) throw err
+        console.error(`compression attempt ${attemptCount} failed: ${err}, retrying...`)
+      }
+    }
+    
+    throw new Error(`failed to compress file under ${Math.round(this.MAX_FILE_SIZE_BYTES/1024/1024)}MB limit after ${maxAttempts} attempts`)
+  }
+  
+  private async runFfmpeg(
+    inputPath: string,
+    outputPath: string,
+    volAdjustment: number,
+    metadata: MediaMetadata,
+    crf: number, 
+    audioBitrate: string
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const processTimeout = setTimeout(() => {
         reject(new Error(`processing timed out for: ${inputPath}`))
@@ -190,10 +243,10 @@ export class MediaProcessor {
         // video output (mp4)
         command = command
           .outputOptions('-c:v libx264')        // video codec (h264)
-          .outputOptions(`-crf ${this.VIDEO_CRF}`)  // quality (lower = better)
+          .outputOptions(`-crf ${crf}`)         // quality (higher = more compression)
           .outputOptions('-preset fast')        // encoding speed vs compression
           .outputOptions('-pix_fmt yuv420p')    // pixel format for compatibility
-          .outputOptions(`-b:a ${this.AUDIO_BITRATE}`) // audio bitrate
+          .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
           .outputOptions('-c:a aac')            // audio codec
           
         // scale video if needed while maintaining aspect ratio
@@ -208,7 +261,7 @@ export class MediaProcessor {
         // audio-only output (mp3)
         command = command
           .outputOptions('-c:a libmp3lame')     // mp3 codec
-          .outputOptions(`-b:a ${this.AUDIO_BITRATE}`) // audio bitrate
+          .outputOptions(`-b:a ${audioBitrate}`) // audio bitrate
       }
 
       command

@@ -31,7 +31,7 @@ export class ChatCommandHandler {
       if (!searchTerm) return;
       
       // show typing indicator while processing
-      await message.channel.sendTyping();
+      message.channel.sendTyping?.() || await message.channel.typing?.start?.();
       
       // search for media with matching title
       const db = DatabaseManager.getInstance();
