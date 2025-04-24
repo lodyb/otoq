@@ -9,7 +9,8 @@ export class EffectsManager {
     'slow', 'fast', 'bass', 'clipping', 'reverse', 'random',
     'chorus', 'ess', 'mountains', 'whisper', 'robot', 'phaser', 
     'tremelo', 'vibrato', 'oscilloscope', 'pixelize', 'interlace', 
-    'drunk', '360', 'vectorscope', 'amplify', 'echo'
+    'drunk', '360', 'vectorscope', 'amplify', 'echo',
+    'crazy', 'delay', 'blur', 'sharp', 'dark', 'bright', 'colorshift', 'grain', 'glitch'
   ]
 
   private constructor() {}
@@ -132,6 +133,7 @@ export class EffectsManager {
     let bassGain = 0
     let crystalizerIntensity = 0
     let echoCount = 0
+    let delayCount = 0
     
     effects.forEach(effect => {
       switch (effect) {
@@ -196,6 +198,19 @@ export class EffectsManager {
         case 'fast':
           audioFilter += 'atempo=1.5,'
           break
+          
+        case 'crazy':
+          audioFilter += 'acrusher=.1:1:64:0:log,'
+          crystalizerIntensity += 3
+          break
+          
+        case 'delay':
+          delayCount++
+          // different style of delay than echo
+          const delayMs = 150 + (delayCount * 200)
+          const delayMsR = 250 + (delayCount * 150)
+          audioFilter += `adelay=${delayMs}|${delayMsR},`
+          break
       }
     })
     
@@ -223,6 +238,14 @@ export class EffectsManager {
     const videoFilters: string[] = []
     let drunkFrames = 8
     let randomFrames = 4
+    let blurAmount = 2
+    let sharpAmount = 1
+    let darkenAmount = 0.1
+    let brightenAmount = 0.9
+    let hueShift = 45
+    let saturation = 1.3
+    let grainAmount = 4
+    let glitchAmount = 0.3
     
     effects.forEach(effect => {
       switch (effect) {
@@ -270,6 +293,42 @@ export class EffectsManager {
           
         case 'fast':
           videoFilters.push('setpts=0.5*PTS')
+          break
+          
+        case 'blur':
+          videoFilters.push(`boxblur=${blurAmount}:${blurAmount}`)
+          blurAmount = Math.min(blurAmount + 2, 20)
+          break
+          
+        case 'sharp':
+          videoFilters.push(`unsharp=${sharpAmount}:${sharpAmount}:${sharpAmount * 0.3}:${sharpAmount * 0.3}:${sharpAmount * 0.2}:0`)
+          sharpAmount = Math.min(sharpAmount + 1, 5)
+          break
+          
+        case 'dark':
+          videoFilters.push(`colorlevels=rimin=${darkenAmount}:gimin=${darkenAmount}:bimin=${darkenAmount}`)
+          darkenAmount = Math.min(darkenAmount + 0.05, 0.9)
+          break
+          
+        case 'bright':
+          videoFilters.push(`colorlevels=romax=${brightenAmount}:gomax=${brightenAmount}:bomax=${brightenAmount}`)
+          brightenAmount = Math.max(brightenAmount - 0.1, 0.2)
+          break
+          
+        case 'colorshift':
+          videoFilters.push(`hue=h=${hueShift}:s=${saturation}`)
+          hueShift = (hueShift + 45) % 360
+          saturation = Math.min(saturation + 0.3, 3)
+          break
+          
+        case 'grain':
+          videoFilters.push(`noise=alls=${grainAmount}:allf=t`)
+          grainAmount = Math.min(grainAmount + 2, 15)
+          break
+          
+        case 'glitch':
+          videoFilters.push(`datascope=mode=color:format=hex:opacity=${glitchAmount}`)
+          glitchAmount = Math.min(glitchAmount + 0.1, 0.8)
           break
       }
     })
