@@ -71,8 +71,7 @@ export class EffectsManager {
       
       // if part has spaces or doesn't have = and isn't an effect, it's search text
       if (part.includes(' ') || 
-         (!part.includes('=') && !this.validEffects.includes(part) && 
-          !['c', 'clip', 'length', 's', 'start'].includes(part))) {
+         (!part.includes('=') && !this.isEffectParam(part))) {
         textStartIndex = i
         break
       }
@@ -115,14 +114,43 @@ export class EffectsManager {
             }
         }
       } else {
+        // check for numbered effects like echo3
+        const match = part.match(/^(\D+)(\d+)$/)
+        if (match) {
+          const [_, baseEffect, countStr] = match
+          if (this.validEffects.includes(baseEffect)) {
+            const count = parseInt(countStr) || 1
+            for (let j = 0; j < count; j++) {
+              params.effects.push(baseEffect)
+            }
+          }
+        } 
         // single effect
-        if (this.validEffects.includes(part)) {
+        else if (this.validEffects.includes(part)) {
           params.effects.push(part)
         }
       }
     }
     
     return params
+  }
+
+  /**
+   * check if a string might be an effect parameter
+   */
+  private isEffectParam(part: string): boolean {
+    // check for basic effect names
+    if (this.validEffects.includes(part)) return true
+    
+    // check for numbered effects like echo3
+    const match = part.match(/^(\D+)(\d+)$/)
+    if (match) {
+      const [_, baseEffect, _count] = match
+      return this.validEffects.includes(baseEffect)
+    }
+    
+    // check for command params
+    return ['c', 'clip', 'length', 's', 'start'].includes(part)
   }
 
   /**
