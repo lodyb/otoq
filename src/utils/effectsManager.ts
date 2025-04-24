@@ -73,7 +73,164 @@ export class EffectsManager {
       return params
     }
 
-    // extract command without prefix for parsing
+    // extract command prefix to determine type
+    const prefixes = ['..o', '..oc', '..of']
+    let prefix = ''
+    let cmdText = command
+    
+    for (const p of prefixes) {
+      if (command.startsWith(p)) {
+        prefix = p
+        cmdText = command.substring(p.length)
+        break
+      }
+    }
+    
+    // if no valid prefix or no command text
+    if (!prefix || !cmdText) {
+      return params
+    }
+    
+    // extract parts inside curly braces safely
+    const braceMatches: {start: number, end: number, content: string}[] = []
+    let braceStart = -1
+    let braceLevel = 0
+    
+    // find all matching curly brace sections
+    for (let i = 0; i < cmdText.length; i++) {
+      if (cmdText[i] === '{') {
+        braceLevel++
+        if (braceLevel === 1) {
+          braceStart = i
+        }
+      } else if (cmdText[i] === '}') {
+        braceLevel--
+        if (braceLevel === 0 && braceStart !== -1) {
+          braceMatches.push({
+            start: braceStart,
+            end: i,
+            content: cmdText.substring(braceStart + 1, i)
+          })
+          braceStart = -1
+        }
+      }
+    }
+    
+    // if we have any brace matches, we need special handling
+    if (braceMatches.length > 0) {
+      // split command into segments
+      const segments: {type: 'text' | 'brace', content: string}[] = []
+      let lastPos = 0
+      
+      // build segments in order
+      for (const match of braceMatches) {
+        // add text before brace if any
+        if (match.start > lastPos) {
+          segments.push({
+            type: 'text',
+            content: cmdText.substring(lastPos, match.start)
+          })
+        }
+        
+        // add brace content
+        segments.push({
+          type: 'brace',
+          content: match.content
+        })
+        
+        lastPos = match.end + 1
+      }
+      
+      // add any remaining text after last brace
+      if (lastPos < cmdText.length) {
+        segments.push({
+          type: 'text',
+          content: cmdText.substring(lastPos)
+        })
+      }
+      
+      // process segments
+      let filterContent = null
+      let textBeforeFilter = ''
+      let textAfterFilter = ''
+      let foundFilter = false
+      
+      for (const segment of segments) {
+        if (segment.type === 'brace' && !foundFilter) {
+          // first brace content becomes our filter
+          filterContent = segment.content
+          foundFilter = true
+        } else if (segment.type === 'text') {
+          if (!foundFilter) {
+            textBeforeFilter += segment.content
+          } else {
+            textAfterFilter += segment.content
+          }
+        } else if (segment.type === 'brace' && foundFilter) {
+          // additional brace content gets added to search term
+          textAfterFilter += `{${segment.content}}`
+        }
+      }
+      
+      // process standard params from text before filter
+      if (textBeforeFilter) {
+        // Handle parameters that come before the filter braces
+        // Parse standard format params (c=8, s=45, etc.)
+        const standardParams = this.parseStandardPrefixParams(prefix + textBeforeFilter)
+        
+        // Copy the parsed parameters to our result params object
+        if (standardParams.clipLength !== undefined) params.clipLength = standardParams.clipLength;
+        if (standardParams.startTime !== undefined) params.startTime = standardParams.startTime;
+        if (standardParams.effects && standardParams.effects.length > 0) {
+          params.effects = standardParams.effects;
+        }
+        if (standardParams.effectParams) {
+          params.effectParams = standardParams.effectParams;
+        }
+      }
+      
+      // set raw filter content
+      if (filterContent) {
+        params.rawFilters = this.validateRawFilter(filterContent)
+      }
+      
+      // set search term from text after filter
+      params.searchTerm = textAfterFilter.trim()
+      
+      // determine filter type based on the character right before the first brace
+      if (braceMatches[0].start > 0) {
+        const charBeforeBrace = cmdText[braceMatches[0].start - 1]
+        if (charBeforeBrace === 'v') {
+          params.rawFilterType = 'video'
+        } else if (charBeforeBrace === 'a') {
+          params.rawFilterType = 'audio'
+        } else {
+          params.rawFilterType = 'both'
+        }
+      } else {
+        params.rawFilterType = 'both'
+      }
+      
+      return params
+    }
+    
+    // if no braces found, use standard parsing
+    return this.parseStandardCommand(command)
+  }
+
+  /**
+   * parse just the prefix params from a standard command
+   * (everything before the search term)
+   */
+  private parseStandardPrefixParams(command: string): Partial<CommandParams> {
+    const params: Partial<CommandParams> = {
+      effects: [],
+      effectParams: {},
+      clipLength: 10,
+      startTime: 0
+    }
+    
+    // extract command without prefix
     let cmdText = command
     const prefixes = ['..o', '..oc', '..of']
     for (const prefix of prefixes) {
@@ -82,45 +239,77 @@ export class EffectsManager {
         break
       }
     }
+    
+    // remove leading dot if present
+    if (cmdText.startsWith('.')) {
+      cmdText = cmdText.substring(1)
+    }
 
-    // if no command after prefix, return defaults
-    if (!cmdText || cmdText === '') {
+    // no params? return defaults
+    if (!cmdText) {
       return params
     }
+
+    // split params by dots
+    const parts = cmdText.split('.')
     
-    // check for raw filter syntax with {} braces - BEFORE period splitting
-    // this handles the case where filter params have periods like 0.8
-    if (cmdText.includes('{') && cmdText.includes('}')) {
-      // separate the prefix parameters (before the brace) from the filter
-      const braceIndex = cmdText.indexOf('{')
+    // parse param parts (but not search text)
+    for (const part of parts) {
+      // skip parts with spaces (likely search text)
+      if (part.includes(' ')) continue
       
-      // if we have parameters before the brace, process them
-      if (braceIndex > 0) {
-        // only take the part before the brace for period splitting
-        const prefixPart = cmdText.substring(0, braceIndex)
+      // param=value format
+      if (part.includes('=')) {
+        const [paramName, paramValue] = part.split('=')
         
-        // if prefixPart has periods, parse them as normal params
-        if (prefixPart.includes('.')) {
-          // temporarily create a command with just the prefix part
-          const tempCmd = command.substring(0, command.indexOf('{'))
-          
-          // parse the prefix part normally
-          const tempParams = this.parseStandardCommand(tempCmd)
-          
-          // copy the parsed params
-          params.clipLength = tempParams.clipLength
-          params.startTime = tempParams.startTime
-          params.effects = tempParams.effects 
-          params.effectParams = tempParams.effectParams
+        switch (paramName.toLowerCase()) {
+          case 'c':
+          case 'clip':
+          case 'length':
+            params.clipLength = parseFloat(paramValue) || 10
+            break
+            
+          case 's':
+          case 'start':
+            params.startTime = parseFloat(paramValue) || 0
+            break
+            
+          // handle effect params like echo=2
+          default:
+            if (this.validEffects.includes(paramName)) {
+              const value = parseInt(paramValue) || 1
+              params.effectParams![paramName] = value
+              
+              // add to effects array for backward compatibility
+              for (let j = 0; j < value; j++) {
+                params.effects!.push(paramName)
+              }
+            }
+        }
+      } else {
+        // check for numbered effects like echo3
+        const match = part.match(/^(\D+)(\d+)$/)
+        if (match) {
+          const [_, baseEffect, countStr] = match
+          if (this.validEffects.includes(baseEffect)) {
+            const count = parseInt(countStr) || 1
+            params.effectParams![baseEffect] = count
+            
+            // add to effects array for backward compatibility
+            for (let j = 0; j < count; j++) {
+              params.effects!.push(baseEffect)
+            }
+          }
+        } 
+        // single effect
+        else if (this.validEffects.includes(part)) {
+          params.effects!.push(part)
+          params.effectParams![part] = (params.effectParams![part] || 0) + 1
         }
       }
-      
-      // now parse the filter part without interfering with periods inside braces
-      return this.parseRawFilterCommand(command, params)
     }
-
-    // for standard format commands (no braces), use standard parsing
-    return this.parseStandardCommand(command)
+    
+    return params
   }
   
   /**
@@ -238,112 +427,6 @@ export class EffectsManager {
           params.effectParams[part] = (params.effectParams[part] || 0) + 1
         }
       }
-    }
-    
-    return params
-  }
-  
-  /**
-   * parse command with raw filter syntax
-   * format: ..o{filter1=param1=val1:param2=val2,filter2=param=val} search term
-   */
-  private parseRawFilterCommand(command: string, params: CommandParams): CommandParams {
-    // find opening and closing brace positions for the first filter group
-    const firstOpenBrace = command.indexOf('{')
-    const firstCloseBrace = command.indexOf('}', firstOpenBrace)
-    
-    if (firstOpenBrace === -1 || firstCloseBrace === -1 || firstCloseBrace < firstOpenBrace) {
-      // malformed braces, fall back to normal parsing
-      return this.parseCommandString(command.replace(/{|}/g, ''))
-    }
-    
-    // get the prefix part before the first filter
-    const prefixPart = command.substring(0, firstOpenBrace)
-    
-    // extract the first raw filter string
-    const firstFilterStr = command.substring(firstOpenBrace + 1, firstCloseBrace)
-    
-    // look for a second filter group
-    let remainingText = command.substring(firstCloseBrace + 1)
-    let secondFilterStr = null
-    
-    // if there's another opening brace, we have a second filter group
-    if (remainingText.includes('{') && remainingText.includes('}')) {
-      const secondOpenBrace = remainingText.indexOf('{')
-      const secondCloseBrace = remainingText.indexOf('}')
-      
-      if (secondOpenBrace !== -1 && secondCloseBrace !== -1 && secondCloseBrace > secondOpenBrace) {
-        secondFilterStr = remainingText.substring(secondOpenBrace + 1, secondCloseBrace)
-        // extract search term after the second filter group
-        if (secondCloseBrace + 1 < remainingText.length) {
-          params.searchTerm = remainingText.substring(secondCloseBrace + 1).trim()
-        }
-      } else {
-        // only one valid filter group, use original remainder as search term
-        params.searchTerm = remainingText.trim()
-      }
-    } else {
-      // only one filter group, use remainder as search term
-      params.searchTerm = remainingText.trim()
-    }
-    
-    // parse standard params before the filter braces
-    // check for params like c=10, s=30 in the prefix part
-    if (prefixPart.includes('.')) {
-      const parts = prefixPart.split('.')
-      
-      // first part is the command prefix (..o, ..oc, etc)
-      // remaining parts might be params
-      for (let i = 1; i < parts.length; i++) {
-        const part = parts[i]
-        
-        // look for param=value format
-        if (part.includes('=')) {
-          const [paramName, paramValue] = part.split('=')
-          
-          switch (paramName.toLowerCase()) {
-            case 'c':
-            case 'clip':
-            case 'length':
-              params.clipLength = parseFloat(paramValue) || 10
-              break
-              
-            case 's':
-            case 'start':
-              params.startTime = parseFloat(paramValue) || 0
-              break
-              
-            // ignore effect params before braces
-          }
-        }
-      }
-    }
-    
-    // determine filter type - check for a prefix before the {
-    // check for video-specific filter prefix
-    if (prefixPart.endsWith('v')) {
-      params.rawFilterType = 'video'
-    } 
-    // check for audio-specific filter prefix
-    else if (prefixPart.endsWith('a')) {
-      params.rawFilterType = 'audio'
-    }
-    // default to both (combined filter)
-    else {
-      params.rawFilterType = 'both'
-    }
-    
-    // validate and process the first raw filter string
-    const validatedFilter = this.validateRawFilter(firstFilterStr)
-    if (validatedFilter) {
-      params.rawFilters = validatedFilter
-    }
-    
-    // if we have a second filter, it goes in the search term for now
-    // the effectsManager.ts doesn't currently support two independent filter groups
-    if (secondFilterStr) {
-      // prepend second filter group to search term with braces
-      params.searchTerm = `{${secondFilterStr}} ${params.searchTerm || ''}`.trim()
     }
     
     return params
