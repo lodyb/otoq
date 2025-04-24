@@ -118,84 +118,85 @@ export class EffectsManager {
     
     // if we have any brace matches, we need special handling
     if (braceMatches.length > 0) {
-      // split command into segments
-      const segments: {type: 'text' | 'brace', content: string}[] = []
-      let lastPos = 0
+      // ensure we process all text before the first brace as a unit
+      // to prevent decimal points in parameters from breaking parsing
+      const beforeFirstBrace = cmdText.substring(0, braceMatches[0].start)
       
-      // build segments in order
-      for (const match of braceMatches) {
-        // add text before brace if any
-        if (match.start > lastPos) {
-          segments.push({
-            type: 'text',
-            content: cmdText.substring(lastPos, match.start)
-          })
-        }
-        
-        // add brace content
-        segments.push({
-          type: 'brace',
-          content: match.content
-        })
-        
-        lastPos = match.end + 1
+      // find the last period before any space in the prefix
+      // this helps isolate parameters from search text
+      let lastParamDot = beforeFirstBrace.lastIndexOf('.')
+      const firstSpace = beforeFirstBrace.indexOf(' ')
+      if (firstSpace !== -1 && firstSpace < lastParamDot) {
+        lastParamDot = beforeFirstBrace.lastIndexOf('.', firstSpace)
       }
       
-      // add any remaining text after last brace
-      if (lastPos < cmdText.length) {
-        segments.push({
-          type: 'text',
-          content: cmdText.substring(lastPos)
-        })
+      // extract parameters and potential search term from before braces
+      let paramStr = ''
+      let searchBefore = ''
+      
+      if (lastParamDot !== -1) {
+        paramStr = beforeFirstBrace.substring(0, lastParamDot + 1)
+        searchBefore = beforeFirstBrace.substring(lastParamDot + 1)
+      } else {
+        paramStr = beforeFirstBrace
       }
       
-      // process segments
-      let filterContent = null
-      let textBeforeFilter = ''
-      let textAfterFilter = ''
-      let foundFilter = false
+      // check if search term part contains spaces
+      if (!searchBefore.includes(' ')) {
+        // if no spaces, it might still be a parameter
+        paramStr += searchBefore
+        searchBefore = ''
+      }
       
-      for (const segment of segments) {
-        if (segment.type === 'brace' && !foundFilter) {
-          // first brace content becomes our filter
-          filterContent = segment.content
-          foundFilter = true
-        } else if (segment.type === 'text') {
-          if (!foundFilter) {
-            textBeforeFilter += segment.content
-          } else {
-            textAfterFilter += segment.content
-          }
-        } else if (segment.type === 'brace' && foundFilter) {
-          // additional brace content gets added to search term
-          textAfterFilter += `{${segment.content}}`
+      // get the content after the last brace
+      const afterLastBrace = cmdText.substring(braceMatches[braceMatches.length - 1].end + 1)
+      
+      // for the search term, preserve all braces except the first one
+      let searchTerm = searchBefore
+      
+      // add all additional braces to search term
+      if (braceMatches.length > 1) {
+        for (let i = 1; i < braceMatches.length; i++) {
+          const brace = braceMatches[i]
+          // include the previous section to this brace
+          const prevEnd = braceMatches[i-1].end + 1
+          const sectionBefore = cmdText.substring(prevEnd, brace.start)
+          searchTerm += sectionBefore + '{' + brace.content + '}'
         }
       }
       
-      // process standard params from text before filter
-      if (textBeforeFilter) {
-        // Handle parameters that come before the filter braces
+      // add text after the last brace
+      searchTerm += afterLastBrace
+      
+      // extract filter content from first brace only
+      let filterContent = braceMatches[0].content
+      
+      // process standard params
+      if (paramStr) {
+        // append prefix to param string to make it a valid command
+        const paramCommand = prefix + paramStr
+        
         // Parse standard format params (c=8, s=45, etc.)
-        const standardParams = this.parseStandardPrefixParams(prefix + textBeforeFilter)
+        const standardParams = this.parseStandardPrefixParams(paramCommand)
         
         // Copy the parsed parameters to our result params object
-        if (standardParams.clipLength !== undefined) params.clipLength = standardParams.clipLength;
-        if (standardParams.startTime !== undefined) params.startTime = standardParams.startTime;
+        if (standardParams.clipLength !== undefined) params.clipLength = standardParams.clipLength
+        if (standardParams.startTime !== undefined) params.startTime = standardParams.startTime
         if (standardParams.effects && standardParams.effects.length > 0) {
-          params.effects = standardParams.effects;
+          params.effects = standardParams.effects
         }
         if (standardParams.effectParams) {
-          params.effectParams = standardParams.effectParams;
+          params.effectParams = standardParams.effectParams
         }
       }
       
-      // set raw filter content
+      // set raw filter content from first brace
       if (filterContent) {
         params.rawFilters = this.validateRawFilter(filterContent)
       }
       
-      // set search term from text after filter
-      params.searchTerm = textAfterFilter.trim()
+      // set trimmed search term
+      params.searchTerm = searchTerm.trim()
       
       // determine filter type based on the character right before the first brace
       if (braceMatches[0].start > 0) {
