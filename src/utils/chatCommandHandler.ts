@@ -2,58 +2,75 @@ import {
   Message, 
   AttachmentBuilder,
   ChannelType
-} from 'discord.js';
-import { DatabaseManager } from '../database/databaseManager';
-import { GameManager } from './gameManager';
-import path from 'path';
-import fs from 'fs';
-import { EffectsManager, CommandParams } from './effectsManager';
+} from 'discord.js'
+import { DatabaseManager } from '../database/databaseManager'
+import { GameManager } from './gameManager'
+import { AudioPlayerManager } from './audioPlayerManager'
+import path from 'path'
+import fs from 'fs'
+import { EffectsManager, CommandParams } from './effectsManager'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+
+// promisify exec for async/await
+const execAsync = promisify(exec)
 
 export class ChatCommandHandler {
-  private static instance: ChatCommandHandler;
-  private PREFIX = '..o';
-  private PREFIX_PREV = '..op';
-  private PREFIX_CLIP = '..oc';
-  private PREFIX_FRAME = '..of';
+  private static instance: ChatCommandHandler
+  
+  // command prefixes
+  private PREFIX = '..o'           // general media search
+  private PREFIX_PREV = '..op'     // previous media
+  private PREFIX_CLIP = '..oc'     // random clip 
+  private PREFIX_FRAME = '..of'    // random frame
+  private PREFIX_AUDIO = '..oa'    // audio-only filters
+  private PREFIX_VIDEO = '..ov'    // video-only filters
+  
+  // temp directory for processed media
+  private TEMP_DIR = path.join(process.cwd(), 'temp')
 
-  private constructor() {}
+  private constructor() {
+    // make sure temp directory exists
+    if (!fs.existsSync(this.TEMP_DIR)) {
+      fs.mkdirSync(this.TEMP_DIR, { recursive: true })
+    }
+  }
 
   public static getInstance(): ChatCommandHandler {
     if (!ChatCommandHandler.instance) {
-      ChatCommandHandler.instance = new ChatCommandHandler();
+      ChatCommandHandler.instance = new ChatCommandHandler()
     }
-    return ChatCommandHandler.instance;
+    return ChatCommandHandler.instance
   }
 
   public async handleMessage(message: Message): Promise<void> {
     // ignore bot messages
-    if (message.author.bot) return;
+    if (message.author.bot) return
     
     // check for FFmpeg errors that need to be sent to the user
-    await this.checkForFFmpegErrors(message);
+    await this.checkForFFmpegErrors(message)
 
-    // check for ..op command (previous media)
+    // handle various command prefixes
     if (message.content.startsWith(this.PREFIX_PREV)) {
-      await this.handlePreviousMediaCommand(message);
-      return;
+      await this.handlePreviousMediaCommand(message)
+      return
     }
     
-    // check for ..of command (random frame)
     if (message.content.startsWith(this.PREFIX_FRAME)) {
-      await this.handleRandomFrameCommand(message);
-      return;
+      await this.handleRandomFrameCommand(message)
+      return
     }
     
-    // check for ..oc command (random clip)
     if (message.content.startsWith(this.PREFIX_CLIP)) {
-      await this.handleRandomClipCommand(message);
-      return;
+      await this.handleRandomClipCommand(message)
+      return
     }
-
-    // check for ..o command (search media)
-    if (message.content.startsWith(this.PREFIX)) {
-      await this.handleSearchMediaCommand(message);
-      return;
+    
+    if (message.content.startsWith(this.PREFIX_AUDIO) || 
+        message.content.startsWith(this.PREFIX_VIDEO) ||
+        message.content.startsWith(this.PREFIX)) {
+      await this.handleSearchMediaCommand(message)
+      return
     }
   }
   
@@ -62,500 +79,418 @@ export class ChatCommandHandler {
    */
   private async checkForFFmpegErrors(message: Message): Promise<void> {
     try {
-      const effectsManager = EffectsManager.getInstance();
-      const userId = message.author.id;
+      const effectsManager = EffectsManager.getInstance()
+      const userId = message.author.id
       
       if (effectsManager.hasFFmpegError(userId)) {
-        const error = effectsManager.getAndClearFFmpegError(userId);
+        const error = effectsManager.getAndClearFFmpegError(userId)
         if (error) {
           try {
-            await message.author.send(`FFmpeg error from your last command:\n\`\`\`\n${error}\n\`\`\`\n(੭ ˃̣̣̥ ㅂ˂̣̣̥)੭ u can fix and try again`);
+            await message.author.send(`ffmpeg error from your last command:\n\`\`\`\n${error}\n\`\`\`\n(੭ ˃̣̣̥ ㅂ˂̣̣̥)੭ u can fix and try again`)
           } catch (err) {
             // user might have DMs disabled, try to reply in channel
-            console.log(`failed to DM user ${userId} with ffmpeg error: ${err}`);
-            await message.reply(`couldn't send ffmpeg error via DM, check your privacy settings (￣へ￣)`);
+            console.log(`failed to DM user ${userId} with ffmpeg error: ${err}`)
           }
         }
       }
-    } catch (error) {
-      console.error('error checking/sending ffmpeg errors:', error);
+    } catch (err) {
+      console.error('error checking ffmpeg errors:', err)
     }
   }
 
+  /**
+   * handle ..op command to post previous media
+   */
   private async handlePreviousMediaCommand(message: Message): Promise<void> {
+    if (!message.guildId) return
+    
     try {
-      const guildId = message.guild?.id;
-      const channelId = message.channel.id;
+      await message.channel.sendTyping()
       
-      if (!guildId) return;
-      
-      // get game manager and find active session
-      const gameManager = GameManager.getInstance();
-      
-      // typescript is mad because message.channel can be many types
-      // but getSession only accepts TextChannel or ThreadChannel
-      // so only pass the channel if it's the right type
-      const isValidChannel = 
-        message.channel.type === ChannelType.GuildText || 
-        message.channel.type === ChannelType.PublicThread ||
-        message.channel.type === ChannelType.PrivateThread;
-      
-      const session = gameManager.getSession(
-        guildId, 
-        channelId, 
-        isValidChannel ? message.channel : undefined
-      );
+      const gameManager = GameManager.getInstance()
+      const session = gameManager.getSession(message.guildId, message.channelId)
       
       if (!session) {
-        await message.reply(`no active game session in this channel (｡•́︿•̀｡)`);
-        return;
+        await message.reply('no active game session found (￣ヘ￣)')
+        return
       }
       
-      // get previous media id from session
-      const prevMediaId = session.getPreviousMediaId();
+      const previousMediaId = session.getCurrentRound() > 1 ? session.getPreviousMediaId() : null
       
-      if (!prevMediaId) {
-        await message.reply(`no previous media yet (¬_¬)`);
-        return;
+      if (!previousMediaId) {
+        await message.reply('no previous media to post yet (￣ー￣;)')
+        return
       }
       
-      // get the media from database
-      const db = DatabaseManager.getInstance();
-      const prevMedia = await db.getMediaById(prevMediaId);
+      const db = DatabaseManager.getInstance()
+      const mediaItems = await db.getMediaById(previousMediaId)
       
-      if (!prevMedia) {
-        await message.reply(`couldn't find previous media (｡•́︿•̀｡)`);
-        return;
+      if (!mediaItems?.length) {
+        await message.reply('couldnt find that media (╯°□°）╯︵ ┻━┻')
+        return
       }
       
-      // prefer normalized path if available
-      const filePath = prevMedia.normalized_path || prevMedia.file_path;
+      const media = mediaItems[0]
       
-      // check if file exists
-      if (!fs.existsSync(filePath)) {
-        console.error(`media file not found: ${filePath} (id: ${prevMedia.id})`);
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${prevMedia.id}, path: ${filePath}`);
-        return;
-      }
-      
-      // post the file
-      try {
-        const attachment = new AttachmentBuilder(filePath, { name: path.basename(filePath) });
-        await message.reply({ content: `previous song from round ${session.getCurrentRound()-1} (￣▽￣)`, files: [attachment] });
-      } catch (error) {
-        console.error('error posting media:', error);
-        await message.reply(`failed to post media file (╬ಠ益ಠ) check if file is too large`);
-      }
-    } catch (error) {
-      console.error('error handling previous media command:', error);
-      await message.reply('something broke (╯°□°）╯︵ ┻━┻');
-    }
-  }
-
-  private async handleSearchMediaCommand(message: Message): Promise<void> {
-    if (message.author.bot || !message.content.startsWith(this.PREFIX)) return
-
-    try {
-      // parse command for effects and params
+      // parse params but reject if effects are specified
       const effectsManager = EffectsManager.getInstance()
-      
-      // add user id to params for error tracking
       const params = effectsManager.parseCommandString(message.content)
       params.userId = message.author.id
       
-      const db = DatabaseManager.getInstance()
-      let mediaItems = []
-      
-      // if no search term, get random media
-      if (!params.searchTerm) {
-        mediaItems = await db.getRandomMedia(undefined, undefined, undefined, 1)
-      } else {
-        // search for media with matching title
-        mediaItems = await db.getMediaByTitle(params.searchTerm)
-      }
-      
-      if (mediaItems.length === 0) {
-        await message.reply(`no media found ${params.searchTerm ? `matching "${params.searchTerm}"` : ""} (￣︿￣)`)
+      if (params.searchTerm || params.effects.length > 0 || params.rawFilters) {
+        await message.reply('for previous media command, you cant use search or effects (￣ε￣)')
         return
       }
       
-      // use the first (best) match
-      const media = mediaItems[0]
-      
-      // always use original file path for effects
-      const filePath = media.file_path
+      // get normalized path if available
+      const filePath = media.normalized_path || media.file_path
       
       if (!fs.existsSync(filePath)) {
-        console.error(`media file not found: ${filePath} (id: ${media.id})`)
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`)
+        await message.reply('media file not found on disk (￣ヘ￣)')
         return
       }
       
-      // show typing if we're applying effects
-      if (params.effects.length > 0 || params.rawFilters) {
-        try {
-          const channel = message.channel as any
-          if (channel.sendTyping) {
-            await channel.sendTyping()
-          }
-        } catch (e) {
-          // whatever
-        }
-      }
+      // create attachment and post
+      const attachment = new AttachmentBuilder(filePath)
+        .setName(path.basename(filePath))
       
-      // check if effects or raw filters requested
-      if (params.effects.length > 0 || params.rawFilters) {
-        const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance()
-        
-        try {
-          // create clip with effects
-          const outputPath = await audioPlayer.createClipWithEffects(filePath, params)
-          
-          // post the processed file
-          const attachment = new AttachmentBuilder(outputPath, { 
-            name: `${media.id}_${params.effects.join('_')}.mp4` 
-          })
-          
-          let effectsText = ''
-          if (params.effects.length > 0) {
-            effectsText = `with effects: ${params.effects.join(', ')}`
-          } else if (params.rawFilters) {
-            effectsText = `with raw filters`
-          }
-          
-          await message.reply({ 
-            content: `"${media.title}" ${effectsText} (id: ${media.id}) (❁´◡\`❁)`,
-            files: [attachment] 
-          })
-          
-          // clean up temp file after delay
-          setTimeout(() => {
-            if (fs.existsSync(outputPath) && outputPath !== filePath) {
-              try {
-                fs.unlinkSync(outputPath)
-              } catch (err) {
-                console.error(`failed to clean up processed file: ${err}`)
-              }
-            }
-          }, 60000)
-        } catch (error) {
-          console.error('error processing media with effects:', error)
-          await message.reply(`failed to process media with effects (╬ಠ益ಠ) check your DMs for error details`)
-        }
-      } else {
-        // no effects, just post the original file
-        try {
-          const attachment = new AttachmentBuilder(filePath, { name: path.basename(filePath) })
-          await message.reply({ files: [attachment] })
-        } catch (error) {
-          console.error('error posting media:', error)
-          await message.reply(`failed to post media file (╬ಠ益ಠ) check if file is too large`)
-        }
-      }
-    } catch (error) {
-      console.error('error handling media command:', error)
-      await message.reply('something broke (╯°□°）╯︵ ┻━┻')
+      await message.reply({
+        content: `heres the media from the previous round: **${media.title}** (#${media.id})`,
+        files: [attachment]
+      })
+      
+    } catch (err) {
+      console.error('error handling previous media command:', err)
+      await message.reply('error processing command (╯°□°）╯︵ ┻━┻')
     }
   }
 
-  private async handleRandomClipCommand(message: Message): Promise<void> {
-    if (message.author.bot || !message.content.startsWith(this.PREFIX_CLIP)) return
-
-    try {
-      // parse command for effects and params
-      const effectsManager = EffectsManager.getInstance()
-      
-      // add user id to params for error tracking
-      const params = effectsManager.parseCommandString(message.content)
-      params.userId = message.author.id
-      
-      const db = DatabaseManager.getInstance()
-      let mediaItems = []
-      
-      // if no search term, get random media
-      if (!params.searchTerm) {
-        mediaItems = await db.getRandomMedia(undefined, undefined, undefined, 1)
-      } else {
-        // search for media with matching title
-        mediaItems = await db.getMediaByTitle(params.searchTerm)
-      }
-      
-      if (mediaItems.length === 0) {
-        await message.reply(`no media found ${params.searchTerm ? `matching "${params.searchTerm}"` : ""} (￣︿￣)`)
-        return
-      }
-      
-      // use the first (best) match
-      const media = mediaItems[0]
-      
-      // always use original file path for clips
-      const filePath = media.file_path
-      
-      if (!fs.existsSync(filePath)) {
-        console.error(`media file not found: ${filePath} (id: ${media.id})`)
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`)
-        return
-      }
-      
-      // show typing indicator
-      try {
-        const channel = message.channel as any
-        if (channel.sendTyping) {
-          await channel.sendTyping()
-        }
-      } catch (e) {
-        // whatever
-      }
-      
-      const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance()
-      
-      try {
-        // use special effects if requested otherwise create basic clip
-        let clipPath
-        if (params.effects.length > 0 || params.rawFilters) {
-          clipPath = await audioPlayer.createClipWithEffects(filePath, params)
-        } else {
-          clipPath = await audioPlayer.createRandomClip(filePath, {
-            clipLength: params.clipLength
-          })
-        }
-        
-        if (!clipPath) {
-          await message.reply(`failed to create clip (╬ಠ益ಠ)`)
-          return
-        }
-        
-        // prepare message content
-        let content = `random ${params.clipLength}s clip from "${media.title}" (id: ${media.id})`
-        
-        // add effects info if any
-        if (params.effects.length > 0) {
-          content += ` with effects: ${params.effects.join(', ')}`
-        } else if (params.rawFilters) {
-          content += ` with raw filters`
-        }
-        
-        content += " (￣▽￣)"
-        
-        // choose appropriate filename
-        const filename = (params.effects.length > 0 || params.rawFilters)
-          ? `clip_${media.id}_${params.effects.join('_')}.mp4`
-          : `clip_${path.basename(filePath)}`
-          
-        const attachment = new AttachmentBuilder(clipPath, { name: filename })
-        await message.reply({ content, files: [attachment] })
-        
-        // cleanup temp file after delay
-        setTimeout(() => {
-          if (fs.existsSync(clipPath) && clipPath !== filePath) {
-            try {
-              fs.unlinkSync(clipPath)
-            } catch (err) {
-              console.error(`failed to clean up clip: ${err}`)
-            }
-          }
-        }, 60000)
-      } catch (error) {
-        console.error('error creating/posting clip:', error)
-        await message.reply(`failed to create clip (╬ಠ益ಠ) check your DMs for error details`)
-      }
-    } catch (error) {
-      console.error('error handling clip command:', error)
-      await message.reply('something broke (╯°□°）╯︵ ┻━┻')
-    }
-  }
-
+  /**
+   * handle ..of command to extract and post a random frame
+   */
   private async handleRandomFrameCommand(message: Message): Promise<void> {
-    if (message.author.bot || !message.content.startsWith(this.PREFIX_FRAME)) return
-
+    if (!message.guildId) return
+    
     try {
-      // parse command with effects manager
+      // parsing message with effects manager
       const effectsManager = EffectsManager.getInstance()
-      
-      // add user id to params for error tracking
       const params = effectsManager.parseCommandString(message.content)
       params.userId = message.author.id
-      
+            
+      // search DB for media
       const db = DatabaseManager.getInstance()
-      let mediaItems = []
+      const mediaItems = await this.searchMedia(params.searchTerm)
       
-      if (!params.searchTerm) {
-        // get random video files by filtering mp4 only
-        const allMedia = await db.getRandomMedia(undefined, undefined, undefined, 20)
-        mediaItems = allMedia.filter(m => m.file_path.toLowerCase().endsWith('.mp4'))
-        
-        // if no mp4s, try again with larger sample
-        if (mediaItems.length === 0) {
-          const moreMedia = await db.getRandomMedia(undefined, undefined, undefined, 50)
-          mediaItems = moreMedia.filter(m => m.file_path.toLowerCase().endsWith('.mp4'))
-        }
-        
-        // take just one random video
-        if (mediaItems.length > 0) {
-          const randomIndex = Math.floor(Math.random() * mediaItems.length)
-          mediaItems = [mediaItems[randomIndex]]
-        }
-      } else {
-        // search for videos with title match
-        const searchResults = await db.getMediaByTitle(params.searchTerm)
-        mediaItems = searchResults.filter(m => m.file_path.toLowerCase().endsWith('.mp4'))
-      }
-      
-      if (mediaItems.length === 0) {
-        await message.reply(`no mp4 video files found ${params.searchTerm ? `matching "${params.searchTerm}"` : ""} (￣︿￣)`)
+      if (!mediaItems?.length) {
+        await message.reply(`no matching media found for "${params.searchTerm || 'random'}" (￣ヘ￣)`)
         return
       }
       
-      const media = mediaItems[0]
+      // pick a random media item
+      const media = mediaItems[Math.floor(Math.random() * mediaItems.length)]
+      const filePath = media.normalized_path || media.file_path
       
-      // use original file path NOT normalized
-      const filePath = media.file_path
+      // only process video files
+      if (!this.isVideoFile(filePath)) {
+        await message.reply('that media isnt a video file, cant extract frame (￣ε￣)')
+        return
+      }
       
       if (!fs.existsSync(filePath)) {
-        console.error(`media file not found: ${filePath} (id: ${media.id})`)
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`)
+        await message.reply('media file not found on disk (￣ヘ￣)')
         return
       }
       
-      const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance()
+      await message.channel.sendTyping()
       
-      try {
-        const channel = message.channel as any
-        if (channel.sendTyping) {
-          await channel.sendTyping()
-        }
-      } catch (e) {
-        // whatever
+      const audioPlayer = AudioPlayerManager.getInstance()
+      const duration = audioPlayer.getStoredMediaDuration(media.id) / 1000
+      
+      // use either provided start time or random position
+      const startTime = params.startTime > 0 
+        ? params.startTime 
+        : Math.floor(Math.random() * (duration || 60))
+        
+      const outputPath = path.join(this.TEMP_DIR, `frame_${Date.now()}.jpg`)
+      
+      // construct ffmpeg command to extract frame
+      let cmd = `ffmpeg -i "${filePath}" -ss ${startTime} -vframes 1`
+      
+      // apply any video effects if specified
+      const videoEffects = effectsManager.buildVideoEffectsFilter(params.effects, params)
+      if (videoEffects.length > 0) {
+        cmd += ` -vf "${videoEffects.join(',')}"`
       }
       
+      cmd += ` "${outputPath}"`
+      
       try {
-        let framePath: string | null
+        const { stderr } = await execAsync(cmd)
         
-        // check if we should extract frame at specific time
-        if (params.startTime > 0) {
-          const tempPath = `/tmp/otoq/frame_${Date.now()}.jpg`
-          
-          // ensure temp dir exists
-          if (!fs.existsSync('/tmp/otoq')) {
-            fs.mkdirSync('/tmp/otoq', { recursive: true })
-          }
-          
-          // extract frame at specific time
-          const ffmpegCommand = `ffmpeg -i "${filePath}" -ss ${params.startTime} -frames:v 1 "${tempPath}"`
-          await audioPlayer.execCommand(ffmpegCommand, params.userId)
-          
-          framePath = tempPath
-        } else {
-          // extract random frame
-          framePath = await audioPlayer.getRandomScreencapDirect(media.id, filePath)
-        }
-        
-        if (!framePath) {
-          await message.reply(`failed to extract frame (╬ಠ益ಠ)`)
+        if (!fs.existsSync(outputPath)) {
+          console.error('frame extraction failed:', stderr)
+          effectsManager.storeFFmpegError(message.author.id, stderr)
+          await message.reply('failed to extract frame (╯°□°）╯︵ ┻━┻')
           return
         }
         
-        // apply effects to the image if requested
-        if (params.effects.length > 0 || params.rawFilters) {
-          try {
-            const outputPath = `/tmp/otoq/frame_${Date.now()}_effects.jpg`
-            
-            // For standard effects
-            if (params.effects.length > 0 && !params.rawFilters) {
-              // build image filters
-              const imageFilters: string[] = []
-              params.effects.forEach(effect => {
-                switch (effect) {
-                  case 'pixelize':
-                    imageFilters.push('boxblur=10:5')
-                    break
-                  case 'oscilloscope':
-                    imageFilters.push('oscilloscope=x=1:y=1:s=1')
-                    break
-                  case 'vectorscope':
-                    imageFilters.push('vectorscope=mode=color')
-                    break
-                  case 'amplify':
-                    imageFilters.push('eq=contrast=1.5:brightness=0.1:saturation=1.5')
-                    break
-                  case 'drunk':
-                    imageFilters.push('scroll=horizontal=0.1:vertical=0.1')
-                    break
-                  case '360':
-                    imageFilters.push('v360=input=equirect:output=fisheye')
-                    break
-                  case 'interlace':
-                    imageFilters.push('interlace')
-                    break
-                  case 'random':
-                    imageFilters.push('noise=alls=20:allf=t')
-                    break
-                }
-              })
-              
-              if (imageFilters.length > 0) {
-                const filterString = imageFilters.join(',')
-                const ffmpegCommand = `ffmpeg -i "${framePath}" -vf "${filterString}" "${outputPath}"`
-                await audioPlayer.execCommand(ffmpegCommand, params.userId)
-                
-                // use the processed frame
-                framePath = outputPath
-              }
-            }
-            // For raw filters
-            else if (params.rawFilters) {
-              const ffmpegCommand = `ffmpeg -i "${framePath}" -vf "${params.rawFilters}" "${outputPath}"`
-              await audioPlayer.execCommand(ffmpegCommand, params.userId)
-              
-              // use the processed frame if it exists
-              if (fs.existsSync(outputPath)) {
-                framePath = outputPath
-              }
-            }
-          } catch (err) {
-            console.error('failed to apply image effects:', err)
-            // continue with original frame
-          }
-        }
+        // create attachment and post
+        const attachment = new AttachmentBuilder(outputPath)
+          .setName(`frame_${media.id}.jpg`)
         
-        // build content message
-        let content = `random frame from "${media.title}" (id: ${media.id})`
+        await message.reply({
+          content: `random frame from **${media.title}** (#${media.id}) at ${startTime}s`,
+          files: [attachment]
+        })
         
-        // add timestamp info if specific time
-        if (params.startTime > 0) {
-          const minutes = Math.floor(params.startTime / 60)
-          const seconds = Math.floor(params.startTime % 60)
-          content += ` at ${minutes}:${seconds.toString().padStart(2, '0')}`
-        }
-        
-        // add effects info if any
-        if (params.effects.length > 0) {
-          content += ` with effects: ${params.effects.join(', ')}`
-        } else if (params.rawFilters) {
-          content += ` with raw filters`
-        }
-        
-        content += " (￣▽￣)"
-        
-        const attachment = new AttachmentBuilder(framePath, { name: `frame_${media.id}.jpg` })
-        await message.reply({ content, files: [attachment] })
-        
+        // clean up temp file after 5s
         setTimeout(() => {
-          if (fs.existsSync(framePath)) {
-            try {
-              fs.unlinkSync(framePath)
-            } catch (err) {
-              console.error(`failed to clean up frame: ${err}`)
-            }
+          try {
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+          } catch (err) {
+            console.error('failed to clean up temp file:', err)
           }
-        }, 60000)
-      } catch (error) {
-        console.error('error extracting/posting frame:', error)
-        await message.reply(`failed to extract frame (╬ಠ益ಠ) check your DMs for error details`)
+        }, 5000)
+        
+      } catch (err) {
+        console.error('frame extraction error:', err)
+        effectsManager.storeFFmpegError(message.author.id, err.message || String(err))
+        await message.reply('error extracting frame (╯°□°）╯︵ ┻━┻)')
       }
-    } catch (error) {
-      console.error('error handling frame command:', error)
-      await message.reply('something broke (╯°□°）╯︵ ┻━┻')
+      
+    } catch (err) {
+      console.error('error handling random frame command:', err)
+      await message.reply('error processing command (╯°□°）╯︵ ┻━┻')
     }
+  }
+
+  /**
+   * handle ..oc command to create and post a random clip
+   */
+  private async handleRandomClipCommand(message: Message): Promise<void> {
+    if (!message.guildId) return
+    
+    try {
+      // parsing message with effects manager
+      const effectsManager = EffectsManager.getInstance()
+      const params = effectsManager.parseCommandString(message.content)
+      params.userId = message.author.id
+      
+      // ensure clip length is reasonable (default 10s in params)
+      if (params.clipLength <= 0 || params.clipLength > 30) params.clipLength = 10
+            
+      // search DB for media
+      const mediaItems = await this.searchMedia(params.searchTerm)
+      
+      if (!mediaItems?.length) {
+        await message.reply(`no matching media found for "${params.searchTerm || 'random'}" (￣ヘ￣)`)
+        return
+      }
+      
+      // pick a random media item and get path
+      const media = mediaItems[Math.floor(Math.random() * mediaItems.length)]
+      const filePath = media.normalized_path || media.file_path
+      
+      if (!fs.existsSync(filePath)) {
+        await message.reply('media file not found on disk (￣ヘ￣)')
+        return
+      }
+      
+      await message.channel.sendTyping()
+      
+      // determine start time
+      const audioPlayer = AudioPlayerManager.getInstance()
+      const duration = audioPlayer.getStoredMediaDuration(media.id) / 1000
+      
+      // use either provided start time or random position that leaves room for the clip
+      const maxStart = Math.max(0, (duration || 60) - params.clipLength)
+      const startTime = params.startTime > 0 
+        ? Math.min(params.startTime, maxStart) 
+        : Math.floor(Math.random() * (maxStart + 1))
+      
+      // create output path with appropriate extension
+      const isVideo = this.isVideoFile(filePath)
+      const outputExt = isVideo ? '.mp4' : '.mp3'
+      const outputPath = path.join(this.TEMP_DIR, `clip_${Date.now()}${outputExt}`)
+      
+      // get ffmpeg command with effects
+      const cmd = effectsManager.getFFmpegCommand(filePath, outputPath, {
+        ...params,
+        startTime,
+        clipLength: params.clipLength
+      })
+      
+      try {
+        const { stderr } = await execAsync(cmd)
+        
+        if (!fs.existsSync(outputPath)) {
+          console.error('clip creation failed:', stderr)
+          effectsManager.storeFFmpegError(message.author.id, stderr)
+          await message.reply('failed to create clip (╯°□°）╯︵ ┻━┻')
+          return
+        }
+        
+        // create attachment
+        const attachment = new AttachmentBuilder(outputPath)
+          .setName(`clip_${media.id}${outputExt}`)
+        
+        // prepare message with effects info
+        const effectsText = params.effects.length > 0 
+          ? ` with effects: ${params.effects.join(', ')}`
+          : ''
+        
+        const filtersText = params.rawFilters
+          ? ` with custom filters`
+          : ''
+        
+        await message.reply({
+          content: `${params.clipLength}s clip from **${media.title}** (#${media.id}) at ${startTime}s${effectsText}${filtersText}`,
+          files: [attachment]
+        })
+        
+        // clean up temp file after 10s
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+          } catch (err) {
+            console.error('failed to clean up temp file:', err)
+          }
+        }, 10000)
+        
+      } catch (err) {
+        console.error('clip creation error:', err)
+        effectsManager.storeFFmpegError(message.author.id, err.message || String(err))
+        await message.reply('error creating clip (╯°□°）╯︵ ┻━┻')
+      }
+      
+    } catch (err) {
+      console.error('error handling random clip command:', err)
+      await message.reply('error processing command (╯°□°）╯︵ ┻━┻')
+    }
+  }
+
+  /**
+   * handle ..o command to search and post media
+   */
+  private async handleSearchMediaCommand(message: Message): Promise<void> {
+    if (!message.guildId) return
+    
+    try {
+      // parsing message with effects manager
+      const effectsManager = EffectsManager.getInstance()
+      const params = effectsManager.parseCommandString(message.content)
+      params.userId = message.author.id
+            
+      // search DB for media
+      const mediaItems = await this.searchMedia(params.searchTerm)
+      
+      if (!mediaItems?.length) {
+        await message.reply(`no matching media found for "${params.searchTerm || 'random'}" (￣ヘ￣)`)
+        return
+      }
+      
+      // pick a random media item
+      const media = mediaItems[Math.floor(Math.random() * mediaItems.length)]
+      const filePath = media.normalized_path || media.file_path
+      
+      if (!fs.existsSync(filePath)) {
+        await message.reply('media file not found on disk (￣ヘ￣)')
+        return
+      }
+      
+      await message.channel.sendTyping()
+      
+      // check if we need to apply effects
+      if (!params.effects.length && !params.rawFilters) {
+        // just post the original file
+        const attachment = new AttachmentBuilder(filePath)
+          .setName(path.basename(filePath))
+        
+        await message.reply({
+          content: `heres **${media.title}** (#${media.id})`,
+          files: [attachment]
+        })
+        return
+      }
+      
+      // we need to process with effects
+      const isVideo = this.isVideoFile(filePath)
+      const outputExt = isVideo ? '.mp4' : '.mp3'
+      const outputPath = path.join(this.TEMP_DIR, `effect_${Date.now()}${outputExt}`)
+      
+      // get ffmpeg command with effects
+      const cmd = effectsManager.getFFmpegCommand(filePath, outputPath, params)
+      
+      try {
+        const { stderr } = await execAsync(cmd)
+        
+        if (!fs.existsSync(outputPath)) {
+          console.error('effect processing failed:', stderr)
+          effectsManager.storeFFmpegError(message.author.id, stderr)
+          await message.reply('failed to process effects (╯°□°）╯︵ ┻━┻')
+          return
+        }
+        
+        // create attachment
+        const attachment = new AttachmentBuilder(outputPath)
+          .setName(`effect_${media.id}${outputExt}`)
+        
+        // effects info for message
+        const effectsText = params.effects.length > 0 
+          ? ` with effects: ${params.effects.join(', ')}`
+          : ''
+        
+        const filtersText = params.rawFilters
+          ? ` with custom filters`
+          : ''
+        
+        await message.reply({
+          content: `heres **${media.title}** (#${media.id})${effectsText}${filtersText}`,
+          files: [attachment]
+        })
+        
+        // clean up temp file after 10s
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+          } catch (err) {
+            console.error('failed to clean up temp file:', err)
+          }
+        }, 10000)
+        
+      } catch (err) {
+        console.error('effect processing error:', err)
+        effectsManager.storeFFmpegError(message.author.id, err.message || String(err))
+        await message.reply('error processing effects (╯°□°）╯︵ ┻━┻')
+      }
+      
+    } catch (err) {
+      console.error('error handling search media command:', err)
+      await message.reply('error processing command (╯°□°）╯︵ ┻━┻')
+    }
+  }
+
+  /**
+   * search for media in the database
+   */
+  private async searchMedia(searchTerm: string): Promise<any[]> {
+    const db = DatabaseManager.getInstance()
+    
+    if (!searchTerm) {
+      // get random media
+      return await db.getRandomMedia(1)
+    }
+    
+    // search by term
+    return await db.searchMedia(searchTerm)
+  }
+
+  /**
+   * check if file is a video based on extension
+   */
+  private isVideoFile(filePath: string): boolean {
+    const videoExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.m4v']
+    const ext = path.extname(filePath).toLowerCase()
+    return videoExtensions.includes(ext)
   }
 }

@@ -3,3 +3,9 @@ export interface Player {
   username: string;
   score: number;
 }
+
+interface TypeDefinition {
+  types: CommandParams
+}
+
+export type { TypeDefinition }
