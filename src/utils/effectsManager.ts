@@ -547,7 +547,22 @@ export class EffectsManager {
     if (!this.isAudioFile(inputExt)) {
       const videoFilters = this.buildVideoEffectsFilter(params.effects, params)
       if (videoFilters.length > 0) {
-        cmd += ` -filter_complex "${videoFilters.join(',')}"`
+        cmd += ` -vf "${videoFilters.join(',')}"`
+      }
+    }
+    
+    // for raw filters, we need to handle special case for both audio and video
+    if (params.rawFilters && params.rawFilterType === 'both') {
+      // override the filters with a special complex filter
+      if (this.isAudioFile(inputExt)) {
+        // for audio files, just apply to audio stream
+        cmd = cmd.replace(/ -af "[^"]*"/, '') // remove any -af
+        cmd += ` -af "${params.rawFilters}"`
+      } else {
+        // for video files, need more complex handling
+        cmd = cmd.replace(/ -af "[^"]*"/, '') // remove any -af
+        cmd = cmd.replace(/ -vf "[^"]*"/, '') // remove any -vf
+        cmd += ` -filter_complex "${params.rawFilters}"`
       }
     }
     

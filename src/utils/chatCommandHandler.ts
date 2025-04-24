@@ -340,6 +340,9 @@ export class ChatCommandHandler {
         clipLength: params.clipLength
       })
       
+      console.log(`executing ffmpeg command for clip: ${cmd}`)
+      await message.channel.send(`ffmpeg command: \`${cmd}\``)
+      
       try {
         const { stderr } = await execAsync(cmd)
         
@@ -360,7 +363,7 @@ export class ChatCommandHandler {
           : ''
         
         const filtersText = params.rawFilters
-          ? ` with custom filters`
+          ? ` with custom filters: ${params.rawFilters}`
           : ''
         
         await message.reply({
@@ -381,7 +384,7 @@ export class ChatCommandHandler {
         console.error('clip creation error:', err)
         const typedErr = err as { message?: string }
         effectsManager.storeFFmpegError(message.author.id, typedErr.message || String(err))
-        await message.reply('error creating clip (╯°□°）╯︵ ┻━┻')
+        await message.reply('error processing effects (╯°□°）╯︵ ┻━┻')
       }
       
     } catch (err) {
