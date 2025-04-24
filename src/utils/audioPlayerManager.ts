@@ -8,12 +8,17 @@ import {
   VoiceConnectionStatus,
   entersState
 } from '@discordjs/voice';
-import { VoiceChannel } from 'discord.js';
+import { VoiceChannel, User, DMChannel } from 'discord.js';
 import { MediaItem } from './gameSession';
 import { MediaProcessor } from './mediaProcessor';
+import { EffectsManager } from './effectsManager';
 import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
 
 export class AudioPlayerManager {
   private static instance: AudioPlayerManager;
@@ -338,33 +343,45 @@ export class AudioPlayerManager {
       }
       
       // generate unique output file
-      const ext = params.effects.length > 0 ? '.mp4' : path.extname(filePath)
+      const ext = params.effects.length > 0 || params.rawFilters ? '.mp4' : path.extname(filePath)
       const outputPath = `/tmp/otoq/clip_${Date.now()}${ext}`
       
-      const effectsManager = (await import('./effectsManager')).EffectsManager.getInstance()
+      const effectsManager = EffectsManager.getInstance();
       
-      // if no effects, just use createRandomClip with custom length
-      if (params.effects.length === 0) {
+      // if no effects or raw filters, just use createRandomClip with custom length
+      if (params.effects.length === 0 && !params.rawFilters) {
         return this.createRandomClip(filePath, {
           clipLength: params.clipLength,
           startTime: params.startTime
         })
       }
       
-      // build ffmpeg command with effects
+      // build ffmpeg command with effects or raw filters
       const ffmpegCommand = effectsManager.getFFmpegCommand(
         filePath,
         outputPath,
         params
       )
       
-      // run command
-      await this.execCommand(ffmpegCommand)
+      // run command with error handling
+      await this.execCommand(ffmpegCommand, params.userId || undefined);
       
-      return outputPath
+      // check if output file exists
+      if (!fs.existsSync(outputPath)) {
+        // if failed, try a simple clip without effects
+        console.error('ffmpeg command failed to produce output, falling back to simple clip');
+        return this.createRandomClip(filePath, {
+          clipLength: params.clipLength,
+          startTime: params.startTime
+        });
+      }
+      
+      return outputPath;
     } catch (error) {
-      console.error('failed to create clip with effects:', error)
-      return this.createRandomClip(filePath)
+      console.error('failed to create clip with effects:', error);
+      
+      // fallback to simple clip
+      return this.createRandomClip(filePath);
     }
   }
   
@@ -858,18 +875,26 @@ export class AudioPlayerManager {
   }
 
   // run ffmpeg command (useful for effects processing)
-  public async execCommand(command: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const { exec } = require('child_process')
-      exec(command, (error: any, stdout: string, stderr: string) => {
-        if (error) {
-          console.error(`ffmpeg error: ${error.message}`)
-          console.error(`stderr: ${stderr}`)
-          reject(error)
-          return
+  public async execCommand(command: string, userId?: string): Promise<void> {
+    try {
+      await execPromise(command);
+    } catch (error) {
+      const typedError = error as { message?: string };
+      console.error(`ffmpeg error: ${typedError.message || 'unknown error'}`);
+      
+      // store error for user if userId provided
+      if (userId) {
+        const effectsManager = EffectsManager.getInstance();
+        
+        // limit error length and clean it up for readability
+        let errorMessage = typedError.message || 'unknown error';
+        if (errorMessage.length > 1500) {
+          errorMessage = errorMessage.substring(0, 1500) + '... (truncated)';
         }
-        resolve()
-      })
-    })
+        
+        // store the error with the user ID
+        effectsManager.storeFFmpegError(userId, errorMessage);
+      }
+    }
   }
 }

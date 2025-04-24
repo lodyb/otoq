@@ -15,7 +15,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: {}
+        effectParams: {},
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       })
     })
 
@@ -26,7 +29,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: 'test search',
-        effectParams: {}
+        effectParams: {},
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       })
     })
 
@@ -71,8 +77,42 @@ describe('EffectsManager', () => {
         clipLength: 15,
         startTime: 5,
         searchTerm: 'test query',
-        effectParams: { bass: 1, echo: 2 }
+        effectParams: { bass: 1, echo: 2 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       })
+    })
+    
+    test('parses raw filter syntax with curly braces', () => {
+      const result = effectsManager.parseCommandString('..o{amplify=factor=2:threshold=0.5} test query')
+      expect(result).toEqual({
+        effects: [],
+        clipLength: 10,
+        startTime: 0,
+        searchTerm: 'test query',
+        effectParams: {},
+        rawFilters: 'amplify=factor=2:threshold=0.5',
+        rawFilterType: 'both',
+        userId: null
+      })
+    })
+    
+    test('parses audio-specific raw filter syntax', () => {
+      const result = effectsManager.parseCommandString('..oa{bass=g=20,aecho=0.8:0.5:500:0.5}')
+      expect(result.rawFilters).toBe('bass=g=20,aecho=0.8:0.5:500:0.5')
+      expect(result.rawFilterType).toBe('audio')
+    })
+    
+    test('parses video-specific raw filter syntax', () => {
+      const result = effectsManager.parseCommandString('..ov{hue=h=90:s=2,boxblur=5:5}')
+      expect(result.rawFilters).toBe('hue=h=90:s=2,boxblur=5:5')
+      expect(result.rawFilterType).toBe('video')
+    })
+    
+    test('sanitizes dangerous characters in raw filters', () => {
+      const result = effectsManager.parseCommandString('..o{amplify=factor=2;rm -rf /} test query')
+      expect(result.rawFilters).toBe(null) // should be rejected due to semicolon
     })
   })
 
@@ -106,11 +146,29 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: { bass: 3, echo: 2 }
+        effectParams: { bass: 3, echo: 2 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.buildAudioEffectsFilter(params.effects, params)
       expect(result).toContain('bass=g=30') // 3 * 10
       expect(result).toContain('aecho=') 
+    })
+    
+    test('uses raw filters when provided', () => {
+      const params: CommandParams = {
+        effects: [],
+        clipLength: 10,
+        startTime: 0,
+        searchTerm: '',
+        effectParams: {},
+        rawFilters: 'aecho=0.8:0.5:100:0.5,bass=g=20',
+        rawFilterType: 'audio',
+        userId: null
+      }
+      const result = effectsManager.buildAudioEffectsFilter([], params)
+      expect(result).toBe('aecho=0.8:0.5:100:0.5,bass=g=20')
     })
   })
 
@@ -138,11 +196,29 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: { blur: 3, amplify: 2 }
+        effectParams: { blur: 3, amplify: 2 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.buildVideoEffectsFilter(params.effects, params)
       expect(result[0]).toMatch(/boxblur=6:6/) // 2 * 3
       expect(result[1]).toMatch(/amplify=factor=3/) // 1.5 * 2
+    })
+    
+    test('uses raw filters when provided', () => {
+      const params: CommandParams = {
+        effects: [],
+        clipLength: 10,
+        startTime: 0,
+        searchTerm: '',
+        effectParams: {},
+        rawFilters: 'hue=h=90:s=2,boxblur=5:5',
+        rawFilterType: 'video',
+        userId: null
+      }
+      const result = effectsManager.buildVideoEffectsFilter([], params)
+      expect(result).toEqual(['hue=h=90:s=2', 'boxblur=5:5'])
     })
   })
 
@@ -153,7 +229,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: {}
+        effectParams: {},
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.getFFmpegCommand('input.mp4', 'output.mp4', params)
       expect(result).toContain('ffmpeg -i "input.mp4"')
@@ -167,7 +246,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 30,
         searchTerm: '',
-        effectParams: {}
+        effectParams: {},
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.getFFmpegCommand('input.mp4', 'output.mp4', params)
       expect(result).toContain('-ss 30')
@@ -179,7 +261,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: { bass: 1, echo: 1 }
+        effectParams: { bass: 1, echo: 1 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.getFFmpegCommand('input.mp4', 'output.mp4', params)
       expect(result).toContain('-af "')
@@ -191,7 +276,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: { pixelize: 1, drunk: 1 }
+        effectParams: { pixelize: 1, drunk: 1 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.getFFmpegCommand('input.mp4', 'output.mp4', params)
       expect(result).toContain('-filter_complex "')
@@ -203,7 +291,10 @@ describe('EffectsManager', () => {
         clipLength: 15,
         startTime: 5,
         searchTerm: '',
-        effectParams: { bass: 1, echo: 1, pixelize: 1, reverse: 1 }
+        effectParams: { bass: 1, echo: 1, pixelize: 1, reverse: 1 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.getFFmpegCommand('input.mp4', 'output.mp4', params)
       expect(result).toContain('ffmpeg -i "input.mp4"')
@@ -220,11 +311,29 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: { bass: 1, echo: 1 }
+        effectParams: { bass: 1, echo: 1 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.getFFmpegCommand('input.mp3', 'output.mp4', params)
       expect(result).toContain('"output.mp3"') // should change extension
       expect(result).toContain('libmp3lame') // should use mp3 codec
+    })
+    
+    test('uses raw filters in command when provided', () => {
+      const params: CommandParams = {
+        effects: [],
+        clipLength: 10,
+        startTime: 0,
+        searchTerm: '',
+        effectParams: {},
+        rawFilters: 'amplify=factor=2:threshold=0.5,echo=0.5:0.5:100:0.5',
+        rawFilterType: 'both',
+        userId: null
+      }
+      const result = effectsManager.getFFmpegCommand('input.mp4', 'output.mp4', params)
+      expect(result).toContain('amplify=factor=2:threshold=0.5,echo=0.5:0.5:100:0.5')
     })
   })
 
@@ -235,7 +344,10 @@ describe('EffectsManager', () => {
         clipLength: 10, 
         startTime: 0,
         searchTerm: '',
-        effectParams: { echo: 3 }
+        effectParams: { echo: 3 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const result = effectsManager.buildAudioEffectsFilter(params.effects, params)
       expect(result).toContain('aecho=0.8:0.3:900:0.5') // Using echo param=3
@@ -247,7 +359,10 @@ describe('EffectsManager', () => {
         clipLength: 10,
         startTime: 0,
         searchTerm: '',
-        effectParams: { fast: 1, reverse: 1 }
+        effectParams: { fast: 1, reverse: 1 },
+        rawFilters: null,
+        rawFilterType: null,
+        userId: null
       }
       const audioResult = effectsManager.buildAudioEffectsFilter(params.effects, params)
       const videoResult = effectsManager.buildVideoEffectsFilter(params.effects, params)

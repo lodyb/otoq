@@ -14,6 +14,32 @@ export class EffectsManager {
     'drunk', '360', 'vectorscope', 'amplify', 'echo',
     'crazy', 'delay', 'blur', 'sharp', 'dark', 'bright', 'colorshift', 'grain', 'glitch'
   ]
+  
+  // whitelist of allowed raw ffmpeg filters
+  private validRawFilters = [
+    // audio filters
+    'afftfilt', 'aecho', 'aeval', 'afade', 'acrusher', 'adelay', 'aresample',
+    'areverse', 'atempo', 'bass', 'bandpass', 'bandreject', 'chorus', 'compand',
+    'compensationdelay', 'crossfeed', 'crystalizer', 'dcshift', 'deesser',
+    'drmeter', 'dynaudnorm', 'earwax', 'equalizer', 'extrastereo', 'firequalizer',
+    'flanger', 'haas', 'hdcd', 'highpass', 'join', 'loudnorm', 'lowpass',
+    'mcompand', 'pan', 'phaser', 'aphaser', 'apulsator', 'reverb', 'sidechaincompress', 
+    'silenceremove', 'stereotools', 'stereowiden', 'superequalizer', 'surround', 
+    'tremolo', 'vibrato', 'volume', 'volumedetect',
+    
+    // video filters
+    'amplify', 'boxblur', 'colorbalance', 'colorchannelmixer', 'colorlevels',
+    'colormatrix', 'convolution', 'datascope', 'deband', 'deflicker', 'deshake',
+    'despill', 'drawbox', 'drawgrid', 'edgedetect', 'elbg', 'eq', 'gblur',
+    'gradfun', 'hflip', 'hue', 'interlace', 'kerndeint', 'lenscorrection',
+    'loop', 'lutyuv', 'lut3d', 'negate', 'noise', 'normalize', 'oscilloscope',
+    'pixelize', 'random', 'reverse', 'rotate', 'scale', 'setpts', 'sharpen',
+    'smartblur', 'stereo3d', 'swapuv', 'tmix', 'transpose', 'unsharp', 'v360',
+    'vectorscope', 'vflip', 'vignette', 'zoompan'
+  ]
+  
+  // users who have gotten ffmpeg errors (to be DM'd)
+  private ffmpegErrors: Map<string, string> = new Map()
 
   private constructor() {}
 
@@ -26,7 +52,9 @@ export class EffectsManager {
 
   /**
    * parse command for effects and params
-   * format: ..o.param1=value1.param2=value2
+   * formats:
+   * - ..o.param1=value1.param2=value2
+   * - ..o{filter1=param1=val1:param2=val2,filter2=param=val} search term
    */
   public parseCommandString(command: string): CommandParams {
     const params: CommandParams = {
@@ -34,7 +62,10 @@ export class EffectsManager {
       clipLength: 10,
       startTime: 0,
       searchTerm: '',
-      effectParams: {}
+      effectParams: {},
+      rawFilters: null,
+      userId: null,
+      rawFilterType: null
     }
 
     // handle basic command case
@@ -56,7 +87,13 @@ export class EffectsManager {
     if (!cmdText || cmdText === '') {
       return params
     }
+    
+    // check for raw filter syntax with {} braces
+    if (cmdText.includes('{') && cmdText.includes('}')) {
+      return this.parseRawFilterCommand(command, params)
+    }
 
+    // for standard format commands, continue with the original parsing logic
     // remove leading dot if present
     if (cmdText.startsWith('.')) {
       cmdText = cmdText.substring(1)
@@ -150,6 +187,131 @@ export class EffectsManager {
     
     return params
   }
+  
+  /**
+   * parse command with raw filter syntax
+   * format: ..o{filter1=param1=val1:param2=val2,filter2=param=val} search term
+   */
+  private parseRawFilterCommand(command: string, params: CommandParams): CommandParams {
+    // find opening and closing brace positions
+    const openBrace = command.indexOf('{')
+    const closeBrace = command.indexOf('}')
+    
+    if (openBrace === -1 || closeBrace === -1 || closeBrace < openBrace) {
+      // malformed braces, fall back to normal parsing
+      return this.parseCommandString(command.replace(/{|}/g, ''))
+    }
+    
+    // extract raw filter string
+    const rawFilterStr = command.substring(openBrace + 1, closeBrace)
+    
+    // extract search term if any (after the closing brace)
+    if (closeBrace + 1 < command.length) {
+      params.searchTerm = command.substring(closeBrace + 1).trim()
+    }
+    
+    // determine filter type - check for a prefix before the {
+    const prefixPart = command.substring(0, openBrace)
+    
+    // check for video-specific filter prefix
+    if (prefixPart.endsWith('v')) {
+      params.rawFilterType = 'video'
+    } 
+    // check for audio-specific filter prefix
+    else if (prefixPart.endsWith('a')) {
+      params.rawFilterType = 'audio'
+    }
+    // default to both (combined filter)
+    else {
+      params.rawFilterType = 'both'
+    }
+    
+    // validate and process the raw filter string
+    const validatedFilter = this.validateRawFilter(rawFilterStr)
+    if (validatedFilter) {
+      params.rawFilters = validatedFilter
+    }
+    
+    return params
+  }
+  
+  /**
+   * validate a raw filter string to prevent command injection
+   * returns sanitized filter string or null if invalid
+   */
+  private validateRawFilter(filterStr: string): string | null {
+    if (!filterStr || filterStr.trim() === '') {
+      return null
+    }
+    
+    try {
+      // split into individual filters
+      const filters = filterStr.split(',')
+      const validatedFilters: string[] = []
+      
+      for (const filter of filters) {
+        // check for basic filter syntax: filtername=params
+        const eqIndex = filter.indexOf('=')
+        if (eqIndex === -1) {
+          // only filter name, check if it's in whitelist
+          if (this.validRawFilters.includes(filter.trim())) {
+            validatedFilters.push(filter.trim())
+          }
+          continue
+        }
+        
+        // extract filter name
+        const filterName = filter.substring(0, eqIndex).trim()
+        
+        // check if filter is in whitelist
+        if (!this.validRawFilters.includes(filterName)) {
+          continue
+        }
+        
+        // for params, we don't validate individual values as ffmpeg will handle ranges
+        // but we do sanitize for shell injection
+        const paramsPart = filter.substring(eqIndex + 1)
+        
+        // basic sanitization for shell safety
+        if (this.hasDangerousChars(paramsPart)) {
+          continue
+        }
+        
+        // this filter + params validated, add to result
+        validatedFilters.push(`${filterName}=${paramsPart}`)
+      }
+      
+      // if all filters were invalid, return null
+      if (validatedFilters.length === 0) {
+        return null
+      }
+      
+      // join validated filters
+      return validatedFilters.join(',')
+    } catch (error) {
+      console.error('error validating raw filter:', error)
+      return null
+    }
+  }
+  
+  /**
+   * check for dangerous characters that could allow shell injection
+   */
+  private hasDangerousChars(input: string): boolean {
+    // character blacklist for shell command injection
+    const dangerousPatterns = [
+      // shell escape sequences
+      ';', '&', '|', '`', '$', '\\', 
+      // redirection
+      '>', '<',
+      // quotes that could break out of our ffmpeg string
+      '"', "'",
+      // parentheses that could be used in shell scripting
+      '(', ')'
+    ]
+    
+    return dangerousPatterns.some(pattern => input.includes(pattern))
+  }
 
   /**
    * check if a string might be an effect parameter
@@ -173,6 +335,12 @@ export class EffectsManager {
    * build ffmpeg filter string for audio effects
    */
   public buildAudioEffectsFilter(effects: string[], params?: CommandParams): string {
+    // if raw audio filters are provided, use them directly
+    if (params?.rawFilters && (params.rawFilterType === 'audio' || params.rawFilterType === 'both')) {
+      return params.rawFilters
+    }
+    
+    // otherwise, use the existing logic
     let audioFilter = ''
     let bassGain = 0
     let crystalizerIntensity = 0
@@ -396,6 +564,14 @@ export class EffectsManager {
    * build ffmpeg filter string for video effects
    */
   public buildVideoEffectsFilter(effects: string[], params?: CommandParams): string[] {
+    // if raw video filters are provided, use them directly
+    if (params?.rawFilters && (params.rawFilterType === 'video' || params.rawFilterType === 'both')) {
+      // for raw video filters, we need to convert the comma-separated string to array
+      // as video filters are handled differently than audio filters
+      return params.rawFilters.split(',')
+    }
+    
+    // otherwise, use existing code
     const videoFilters: string[] = []
     
     // get effect params if available
@@ -617,7 +793,10 @@ export class EffectsManager {
       outputFile = outputFile.replace(/\.mp4$/, '.mp3')
     }
     
+    // build audio filter string 
     const audioFilter = this.buildAudioEffectsFilter(params.effects, params)
+    
+    // build video filters array
     const videoFilters = hasVideo ? this.buildVideoEffectsFilter(params.effects, params) : []
     
     let filterComplex = ''
@@ -683,6 +862,32 @@ export class EffectsManager {
       return true
     }
   }
+  
+  /**
+   * store ffmpeg error for a user to be sent as DM
+   */
+  public storeFFmpegError(userId: string, error: string): void {
+    this.ffmpegErrors.set(userId, error)
+  }
+  
+  /**
+   * get and clear ffmpeg error for a user
+   */
+  public getAndClearFFmpegError(userId: string): string | null {
+    const error = this.ffmpegErrors.get(userId)
+    if (error) {
+      this.ffmpegErrors.delete(userId)
+      return error
+    }
+    return null
+  }
+  
+  /**
+   * check if a user has pending ffmpeg errors
+   */
+  public hasFFmpegError(userId: string): boolean {
+    return this.ffmpegErrors.has(userId)
+  }
 }
 
 /**
@@ -694,4 +899,7 @@ export interface CommandParams {
   startTime: number
   searchTerm: string
   effectParams: { [key: string]: number }
+  rawFilters: string | null
+  rawFilterType: 'audio' | 'video' | 'both' | null
+  userId: string | null
 }

@@ -28,6 +28,9 @@ export class ChatCommandHandler {
   public async handleMessage(message: Message): Promise<void> {
     // ignore bot messages
     if (message.author.bot) return;
+    
+    // check for FFmpeg errors that need to be sent to the user
+    await this.checkForFFmpegErrors(message);
 
     // check for ..op command (previous media)
     if (message.content.startsWith(this.PREFIX_PREV)) {
@@ -51,6 +54,31 @@ export class ChatCommandHandler {
     if (message.content.startsWith(this.PREFIX)) {
       await this.handleSearchMediaCommand(message);
       return;
+    }
+  }
+  
+  /**
+   * check if user has pending FFmpeg errors and send them via DM
+   */
+  private async checkForFFmpegErrors(message: Message): Promise<void> {
+    try {
+      const effectsManager = EffectsManager.getInstance();
+      const userId = message.author.id;
+      
+      if (effectsManager.hasFFmpegError(userId)) {
+        const error = effectsManager.getAndClearFFmpegError(userId);
+        if (error) {
+          try {
+            await message.author.send(`FFmpeg error from your last command:\n\`\`\`\n${error}\n\`\`\`\n(੭ ˃̣̣̥ ㅂ˂̣̣̥)੭ u can fix and try again`);
+          } catch (err) {
+            // user might have DMs disabled, try to reply in channel
+            console.log(`failed to DM user ${userId} with ffmpeg error: ${err}`);
+            await message.reply(`couldn't send ffmpeg error via DM, check your privacy settings (￣へ￣)`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('error checking/sending ffmpeg errors:', error);
     }
   }
 
@@ -130,7 +158,10 @@ export class ChatCommandHandler {
     try {
       // parse command for effects and params
       const effectsManager = EffectsManager.getInstance()
+      
+      // add user id to params for error tracking
       const params = effectsManager.parseCommandString(message.content)
+      params.userId = message.author.id
       
       const db = DatabaseManager.getInstance()
       let mediaItems = []
@@ -161,7 +192,7 @@ export class ChatCommandHandler {
       }
       
       // show typing if we're applying effects
-      if (params.effects.length > 0) {
+      if (params.effects.length > 0 || params.rawFilters) {
         try {
           const channel = message.channel as any
           if (channel.sendTyping) {
@@ -172,8 +203,8 @@ export class ChatCommandHandler {
         }
       }
       
-      // check if effects requested
-      if (params.effects.length > 0) {
+      // check if effects or raw filters requested
+      if (params.effects.length > 0 || params.rawFilters) {
         const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance()
         
         try {
@@ -185,8 +216,15 @@ export class ChatCommandHandler {
             name: `${media.id}_${params.effects.join('_')}.mp4` 
           })
           
+          let effectsText = ''
+          if (params.effects.length > 0) {
+            effectsText = `with effects: ${params.effects.join(', ')}`
+          } else if (params.rawFilters) {
+            effectsText = `with raw filters`
+          }
+          
           await message.reply({ 
-            content: `"${media.title}" with effects: ${params.effects.join(', ')} (id: ${media.id}) (❁´◡\`❁)`,
+            content: `"${media.title}" ${effectsText} (id: ${media.id}) (❁´◡\`❁)`,
             files: [attachment] 
           })
           
@@ -202,7 +240,7 @@ export class ChatCommandHandler {
           }, 60000)
         } catch (error) {
           console.error('error processing media with effects:', error)
-          await message.reply(`failed to process media with effects (╬ಠ益ಠ)`)
+          await message.reply(`failed to process media with effects (╬ಠ益ಠ) check your DMs for error details`)
         }
       } else {
         // no effects, just post the original file
@@ -226,7 +264,10 @@ export class ChatCommandHandler {
     try {
       // parse command for effects and params
       const effectsManager = EffectsManager.getInstance()
+      
+      // add user id to params for error tracking
       const params = effectsManager.parseCommandString(message.content)
+      params.userId = message.author.id
       
       const db = DatabaseManager.getInstance()
       let mediaItems = []
@@ -271,7 +312,7 @@ export class ChatCommandHandler {
       try {
         // use special effects if requested otherwise create basic clip
         let clipPath
-        if (params.effects.length > 0) {
+        if (params.effects.length > 0 || params.rawFilters) {
           clipPath = await audioPlayer.createClipWithEffects(filePath, params)
         } else {
           clipPath = await audioPlayer.createRandomClip(filePath, {
@@ -290,12 +331,14 @@ export class ChatCommandHandler {
         // add effects info if any
         if (params.effects.length > 0) {
           content += ` with effects: ${params.effects.join(', ')}`
+        } else if (params.rawFilters) {
+          content += ` with raw filters`
         }
         
         content += " (￣▽￣)"
         
         // choose appropriate filename
-        const filename = params.effects.length > 0 
+        const filename = (params.effects.length > 0 || params.rawFilters)
           ? `clip_${media.id}_${params.effects.join('_')}.mp4`
           : `clip_${path.basename(filePath)}`
           
@@ -314,7 +357,7 @@ export class ChatCommandHandler {
         }, 60000)
       } catch (error) {
         console.error('error creating/posting clip:', error)
-        await message.reply(`failed to create clip (╬ಠ益ಠ)`)
+        await message.reply(`failed to create clip (╬ಠ益ಠ) check your DMs for error details`)
       }
     } catch (error) {
       console.error('error handling clip command:', error)
@@ -328,7 +371,10 @@ export class ChatCommandHandler {
     try {
       // parse command with effects manager
       const effectsManager = EffectsManager.getInstance()
+      
+      // add user id to params for error tracking
       const params = effectsManager.parseCommandString(message.content)
+      params.userId = message.author.id
       
       const db = DatabaseManager.getInstance()
       let mediaItems = []
@@ -396,7 +442,7 @@ export class ChatCommandHandler {
           
           // extract frame at specific time
           const ffmpegCommand = `ffmpeg -i "${filePath}" -ss ${params.startTime} -frames:v 1 "${tempPath}"`
-          await audioPlayer.execCommand(ffmpegCommand)
+          await audioPlayer.execCommand(ffmpegCommand, params.userId)
           
           framePath = tempPath
         } else {
@@ -410,48 +456,61 @@ export class ChatCommandHandler {
         }
         
         // apply effects to the image if requested
-        if (params.effects.length > 0) {
+        if (params.effects.length > 0 || params.rawFilters) {
           try {
             const outputPath = `/tmp/otoq/frame_${Date.now()}_effects.jpg`
             
-            // build image filters
-            const imageFilters: string[] = []
-            params.effects.forEach(effect => {
-              switch (effect) {
-                case 'pixelize':
-                  imageFilters.push('boxblur=10:5')
-                  break
-                case 'oscilloscope':
-                  imageFilters.push('oscilloscope=x=1:y=1:s=1')
-                  break
-                case 'vectorscope':
-                  imageFilters.push('vectorscope=mode=color')
-                  break
-                case 'amplify':
-                  imageFilters.push('eq=contrast=1.5:brightness=0.1:saturation=1.5')
-                  break
-                case 'drunk':
-                  imageFilters.push('scroll=horizontal=0.1:vertical=0.1')
-                  break
-                case '360':
-                  imageFilters.push('v360=input=equirect:output=fisheye')
-                  break
-                case 'interlace':
-                  imageFilters.push('interlace')
-                  break
-                case 'random':
-                  imageFilters.push('noise=alls=20:allf=t')
-                  break
-              }
-            })
-            
-            if (imageFilters.length > 0) {
-              const filterString = imageFilters.join(',')
-              const ffmpegCommand = `ffmpeg -i "${framePath}" -vf "${filterString}" "${outputPath}"`
-              await audioPlayer.execCommand(ffmpegCommand)
+            // For standard effects
+            if (params.effects.length > 0 && !params.rawFilters) {
+              // build image filters
+              const imageFilters: string[] = []
+              params.effects.forEach(effect => {
+                switch (effect) {
+                  case 'pixelize':
+                    imageFilters.push('boxblur=10:5')
+                    break
+                  case 'oscilloscope':
+                    imageFilters.push('oscilloscope=x=1:y=1:s=1')
+                    break
+                  case 'vectorscope':
+                    imageFilters.push('vectorscope=mode=color')
+                    break
+                  case 'amplify':
+                    imageFilters.push('eq=contrast=1.5:brightness=0.1:saturation=1.5')
+                    break
+                  case 'drunk':
+                    imageFilters.push('scroll=horizontal=0.1:vertical=0.1')
+                    break
+                  case '360':
+                    imageFilters.push('v360=input=equirect:output=fisheye')
+                    break
+                  case 'interlace':
+                    imageFilters.push('interlace')
+                    break
+                  case 'random':
+                    imageFilters.push('noise=alls=20:allf=t')
+                    break
+                }
+              })
               
-              // use the processed frame
-              framePath = outputPath
+              if (imageFilters.length > 0) {
+                const filterString = imageFilters.join(',')
+                const ffmpegCommand = `ffmpeg -i "${framePath}" -vf "${filterString}" "${outputPath}"`
+                await audioPlayer.execCommand(ffmpegCommand, params.userId)
+                
+                // use the processed frame
+                framePath = outputPath
+              }
+            }
+            // For raw filters
+            else if (params.rawFilters) {
+              const ffmpegCommand = `ffmpeg -i "${framePath}" -vf "${params.rawFilters}" "${outputPath}"`
+              await audioPlayer.execCommand(ffmpegCommand, params.userId)
+              
+              // use the processed frame if it exists
+              if (fs.existsSync(outputPath)) {
+                framePath = outputPath
+              }
             }
           } catch (err) {
             console.error('failed to apply image effects:', err)
@@ -472,6 +531,8 @@ export class ChatCommandHandler {
         // add effects info if any
         if (params.effects.length > 0) {
           content += ` with effects: ${params.effects.join(', ')}`
+        } else if (params.rawFilters) {
+          content += ` with raw filters`
         }
         
         content += " (￣▽￣)"
@@ -490,7 +551,7 @@ export class ChatCommandHandler {
         }, 60000)
       } catch (error) {
         console.error('error extracting/posting frame:', error)
-        await message.reply(`failed to extract frame (╬ಠ益ಠ)`)
+        await message.reply(`failed to extract frame (╬ಠ益ಠ) check your DMs for error details`)
       }
     } catch (error) {
       console.error('error handling frame command:', error)
