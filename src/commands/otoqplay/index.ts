@@ -52,8 +52,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
   } else {
-    // get random media if no title provided
-    const randomMedia = await db.getRandomMedia(undefined, undefined, undefined, 1);
+    // get random media if id not provided
+    const randomMedia = await db.getRandomMedia(1);
     if (randomMedia.length > 0) {
       media = randomMedia[0];
     } else {

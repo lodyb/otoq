@@ -4,6 +4,10 @@ export interface Player {
   score: number;
 }
 
+export interface CommandParams {
+  types: unknown
+}
+
 interface TypeDefinition {
   types: CommandParams
 }

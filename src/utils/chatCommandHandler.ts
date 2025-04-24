@@ -1,7 +1,8 @@
 import { 
   Message, 
   AttachmentBuilder,
-  ChannelType
+  ChannelType,
+  TextChannel
 } from 'discord.js'
 import { DatabaseManager } from '../database/databaseManager'
 import { GameManager } from './gameManager'
@@ -105,7 +106,10 @@ export class ChatCommandHandler {
     if (!message.guildId) return
     
     try {
-      await message.channel.sendTyping()
+      // check for text channel before using sendTyping
+      if (message.channel.type === ChannelType.GuildText) {
+        await (message.channel as TextChannel).sendTyping()
+      }
       
       const gameManager = GameManager.getInstance()
       const session = gameManager.getSession(message.guildId, message.channelId)
@@ -178,7 +182,6 @@ export class ChatCommandHandler {
       params.userId = message.author.id
             
       // search DB for media
-      const db = DatabaseManager.getInstance()
       const mediaItems = await this.searchMedia(params.searchTerm)
       
       if (!mediaItems?.length) {
@@ -201,7 +204,15 @@ export class ChatCommandHandler {
         return
       }
       
-      await message.channel.sendTyping()
+      // try to get typing signal
+      try {
+        // only call sendTyping on text channels
+        if (message.channel.type === ChannelType.GuildText) {
+          await (message.channel as TextChannel).sendTyping()
+        }
+      } catch (err) {
+        // ignore typing errors
+      }
       
       const audioPlayer = AudioPlayerManager.getInstance()
       const duration = audioPlayer.getStoredMediaDuration(media.id) / 1000
@@ -254,7 +265,8 @@ export class ChatCommandHandler {
         
       } catch (err) {
         console.error('frame extraction error:', err)
-        effectsManager.storeFFmpegError(message.author.id, err.message || String(err))
+        const typedErr = err as { message?: string }
+        effectsManager.storeFFmpegError(message.author.id, typedErr.message || String(err))
         await message.reply('error extracting frame (╯°□°）╯︵ ┻━┻)')
       }
       
@@ -296,7 +308,15 @@ export class ChatCommandHandler {
         return
       }
       
-      await message.channel.sendTyping()
+      // try to get typing signal
+      try {
+        // only call sendTyping on text channels
+        if (message.channel.type === ChannelType.GuildText) {
+          await (message.channel as TextChannel).sendTyping()
+        }
+      } catch (err) {
+        // ignore typing errors
+      }
       
       // determine start time
       const audioPlayer = AudioPlayerManager.getInstance()
@@ -359,7 +379,8 @@ export class ChatCommandHandler {
         
       } catch (err) {
         console.error('clip creation error:', err)
-        effectsManager.storeFFmpegError(message.author.id, err.message || String(err))
+        const typedErr = err as { message?: string }
+        effectsManager.storeFFmpegError(message.author.id, typedErr.message || String(err))
         await message.reply('error creating clip (╯°□°）╯︵ ┻━┻')
       }
       
@@ -398,10 +419,18 @@ export class ChatCommandHandler {
         return
       }
       
-      await message.channel.sendTyping()
+      // try to get typing signal
+      try {
+        // only call sendTyping on text channels
+        if (message.channel.type === ChannelType.GuildText) {
+          await (message.channel as TextChannel).sendTyping()
+        }
+      } catch (err) {
+        // ignore errors with typing indicator
+      }
       
-      // check if we need to apply effects
-      if (!params.effects.length && !params.rawFilters) {
+      // check if we need to apply effects - either standard effects or raw filters
+      if (params.effects.length === 0 && !params.rawFilters) {
         // just post the original file
         const attachment = new AttachmentBuilder(filePath)
           .setName(path.basename(filePath))
@@ -420,6 +449,8 @@ export class ChatCommandHandler {
       
       // get ffmpeg command with effects
       const cmd = effectsManager.getFFmpegCommand(filePath, outputPath, params)
+      
+      console.log(`executing ffmpeg command: ${cmd}`)
       
       try {
         const { stderr } = await execAsync(cmd)
@@ -441,7 +472,7 @@ export class ChatCommandHandler {
           : ''
         
         const filtersText = params.rawFilters
-          ? ` with custom filters`
+          ? ` with custom filters: ${params.rawFilters}`
           : ''
         
         await message.reply({
@@ -460,7 +491,8 @@ export class ChatCommandHandler {
         
       } catch (err) {
         console.error('effect processing error:', err)
-        effectsManager.storeFFmpegError(message.author.id, err.message || String(err))
+        const typedErr = err as { message?: string }
+        effectsManager.storeFFmpegError(message.author.id, typedErr.message || String(err))
         await message.reply('error processing effects (╯°□°）╯︵ ┻━┻')
       }
       

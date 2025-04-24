@@ -98,17 +98,17 @@ export class DatabaseManager {
     });
   }
 
-  public async getRandomMedia(tags?: string[], yearStart?: number, yearEnd?: number, limit: number = 20): Promise<any[]> {
+  public async getRandomMedia(limit: number | string[] = 20, yearStart?: number, yearEnd?: number): Promise<any[]> {
+    // handle the case where limit might be passed as tags instead
+    if (Array.isArray(limit)) {
+      return this.getRandomMediaWithTags(limit, yearStart, yearEnd, 20);
+    }
+    
     let query = 'SELECT m.* FROM media m';
     const params: any[] = [];
     
-    if (tags && tags.length > 0) {
-      query += ` 
-        JOIN media_tags mt ON m.id = mt.media_id
-        JOIN tags t ON mt.tag_id = t.id
-        WHERE t.name IN (${tags.map(() => '?').join(',')})
-      `;
-      params.push(...tags);
+    if (yearStart || yearEnd) {
+      query += ' WHERE 1=1';
       
       if (yearStart) {
         query += ' AND m.year >= ?';
@@ -118,23 +118,6 @@ export class DatabaseManager {
       if (yearEnd) {
         query += ' AND m.year <= ?';
         params.push(yearEnd);
-      }
-      
-      query += ' GROUP BY m.id HAVING COUNT(DISTINCT t.name) = ?';
-      params.push(tags.length);
-    } else {
-      if (yearStart || yearEnd) {
-        query += ' WHERE 1=1';
-        
-        if (yearStart) {
-          query += ' AND m.year >= ?';
-          params.push(yearStart);
-        }
-        
-        if (yearEnd) {
-          query += ' AND m.year <= ?';
-          params.push(yearEnd);
-        }
       }
     }
     
@@ -165,6 +148,57 @@ export class DatabaseManager {
     });
   }
   
+  /**
+   * get random media with specified tags
+   */
+  private async getRandomMediaWithTags(tags: string[], yearStart?: number, yearEnd?: number, limit: number = 20): Promise<any[]> {
+    let query = `
+      SELECT m.* FROM media m
+      JOIN media_tags mt ON m.id = mt.media_id
+      JOIN tags t ON mt.tag_id = t.id
+      WHERE t.name IN (${tags.map(() => '?').join(',')})
+    `;
+    const params: any[] = [...tags];
+    
+    if (yearStart) {
+      query += ' AND m.year >= ?';
+      params.push(yearStart);
+    }
+    
+    if (yearEnd) {
+      query += ' AND m.year <= ?';
+      params.push(yearEnd);
+    }
+    
+    query += ' GROUP BY m.id HAVING COUNT(DISTINCT t.name) = ?';
+    params.push(tags.length);
+    
+    query += ' ORDER BY RANDOM() LIMIT ?';
+    params.push(limit);
+
+    return new Promise((resolve, reject) => {
+      this.db.all(query, params, (err, rows: any[]) => {
+        if (err) reject(err);
+        else {
+          // fix type issues by ensuring each row has an id property
+          const typedRows = rows.map(row => {
+            return {
+              id: row.id,
+              ...row
+            };
+          });
+          
+          // shuffle once more for good measure
+          const result = this.shuffleArray(typedRows);
+          
+          console.log(`tagged media selection: ${result.length} items`);
+          
+          resolve(result);
+        }
+      });
+    });
+  }
+
   private shuffleArray<T>(array: T[]): T[] {
     const result = [...array];
     for (let i = result.length - 1; i > 0; i--) {
@@ -320,14 +354,14 @@ export class DatabaseManager {
     });
   }
 
-  public async getMediaById(mediaId: number): Promise<any> {
+  public async getMediaById(mediaId: number): Promise<any[]> {
     return new Promise((resolve, reject) => {
-      this.db.get(
+      this.db.all(
         'SELECT * FROM media WHERE id = ?',
         [mediaId],
-        (err, row) => {
+        (err, rows) => {
           if (err) reject(err);
-          else resolve(row);
+          else resolve(rows || []);
         }
       );
     });
@@ -573,5 +607,77 @@ export class DatabaseManager {
         }
       );
     });
+  }
+
+  /**
+   * search for media by title
+   */
+  public async searchMedia(searchTerm: string): Promise<any[]> {
+    if (!searchTerm) {
+      return this.getRandomMedia(1)
+    }
+    
+    return new Promise((resolve, reject) => {
+      // first try exact match
+      this.db.all(
+        'SELECT id, title, file_path, normalized_path FROM media WHERE title = ? LIMIT 10',
+        [searchTerm],
+        (err, rows) => {
+          if (err) {
+            reject(err)
+            return
+          }
+          
+          if (rows && rows.length > 0) {
+            resolve(rows)
+            return
+          }
+          
+          // no exact match, try LIKE with % before and after
+          const searchPattern = `%${searchTerm}%`
+          this.db.all(
+            'SELECT id, title, file_path, normalized_path FROM media WHERE title LIKE ? LIMIT 10',
+            [searchPattern],
+            (err, rows) => {
+              if (err) {
+                reject(err)
+                return
+              }
+              
+              if (rows && rows.length > 0) {
+                resolve(rows)
+                return
+              }
+              
+              // no LIKE match either, try fuzzy match
+              this.db.all(
+                `SELECT 
+                   id, title, file_path, normalized_path,
+                   1 - (length(?) * 1.0 / length(title)) as score
+                 FROM media 
+                 WHERE title LIKE ? 
+                 ORDER BY score DESC
+                 LIMIT 10`,
+                [searchTerm, `%${searchTerm.split('').join('%')}%`],
+                (err, fuzzyRows) => {
+                  if (err) {
+                    reject(err)
+                    return
+                  }
+                  
+                  // if all else fails, just return random
+                  if (!fuzzyRows || fuzzyRows.length === 0) {
+                    this.getRandomMedia(1).then(resolve).catch(reject)
+                    return
+                  }
+                  
+                  resolve(fuzzyRows)
+                }
+              )
+            }
+          )
+        }
+      )
+    })
   }
 }

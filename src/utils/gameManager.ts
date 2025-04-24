@@ -58,7 +58,7 @@ export class GameManager {
     // loop until we have enough tracks or max attempts reached
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       // get random media
-      playlist = await this.db.getRandomMedia(tags, yearStart, yearEnd, rounds * 2);
+      playlist = await this.db.getRandomMedia(tags, yearStart, yearEnd);
       
       // if we got enough, break out
       if (playlist.length >= rounds) {

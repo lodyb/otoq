@@ -152,7 +152,7 @@ describe('DatabaseManager', () => {
       ]);
     });
     
-    const result = await dbManager.getRandomMedia(['anime'], 2000, 2010, 5);
+    const result = await dbManager.getRandomMedia(['anime'], 2000, 2010);
     expect(result.length).toBe(2);
     // instead of checking for exact title, just verify we got the expected data
     expect(result.map(item => item.title).sort()).toEqual(['anime song 1', 'anime song 2'].sort());

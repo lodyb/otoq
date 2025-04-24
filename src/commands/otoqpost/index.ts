@@ -34,9 +34,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   
   if (id) {
     const mediaById = await db.getMediaById(id);
-    if (mediaById) {
-      media = mediaById;
+      
+    if (!mediaById || mediaById.length === 0) {
+      await interaction.editReply({ content: 'Media not found (￣ヘ￣)' });
+      return;
     }
+      
+    media = mediaById[0]; // Extract first item from the array
   } else if (title) {
     const mediaItems = await db.getMediaByTitle(title);
     if (mediaItems.length > 0) {
@@ -44,7 +48,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
   } else {
     // get random media if no id or title provided
-    const randomMedia = await db.getRandomMedia(undefined, undefined, undefined, 1);
+    const randomMedia = await db.getRandomMedia(1);
     if (randomMedia.length > 0) {
       media = randomMedia[0];
     }

@@ -156,11 +156,17 @@ async function main() {
           
           try {
             // get media and answers
-            const media = await db.getMediaById(mediaId);
-            if (!media) {
-              await interaction.reply({ content: `media #${mediaId} not found, wtf? (╯°□°）╯︵ ┻━┻`, ephemeral: true });
+            const mediaData = await db.getMediaById(mediaId);
+          
+            if (!mediaData || mediaData.length === 0) {
+              await interaction.reply({ 
+                content: 'media not found (￣ヘ￣)', 
+                ephemeral: true 
+              });
               return;
             }
+            
+            const media = mediaData[0]; // Extract first item
             
             const answers = await db.getMediaAnswers(mediaId);
             

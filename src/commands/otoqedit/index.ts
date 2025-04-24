@@ -43,12 +43,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const mediaId = interaction.options.getInteger('id');
     
     try {
-      const media = await db.getMediaById(mediaId!);
+      const mediaData = await db.getMediaById(mediaId || 0);
       
-      if (!media) {
-        await interaction.editReply(`no media found with id ${mediaId} (ノಠ益ಠ)ノ彡┻━┻`);
+      if (!mediaData || mediaData.length === 0) {
+        await interaction.editReply({ content: 'Media not found (￣ヘ￣)' });
         return;
       }
+      
+      const media = mediaData[0]; // Extract first item from the array
       
       const answers = await db.getMediaAnswers(mediaId!);
       
@@ -82,12 +84,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const answer = interaction.options.getString('answer');
     
     try {
-      const media = await db.getMediaById(mediaId!);
+      const mediaData = await db.getMediaById(mediaId || 0);
       
-      if (!media) {
-        await interaction.editReply(`no media found with id ${mediaId} (ノಠ益ಠ)ノ彡┻━┻`);
+      if (!mediaData || mediaData.length === 0) {
+        await interaction.editReply({ content: 'Media not found (￣ヘ￣)' });
         return;
       }
+      
+      const media = mediaData[0]; // Extract first item from the array
       
       const answerId = await db.addAlternativeAnswer(mediaId!, answer!);
       
@@ -102,12 +106,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const answerId = interaction.options.getInteger('answer_id');
     
     try {
-      const media = await db.getMediaById(mediaId!);
+      const mediaData = await db.getMediaById(mediaId || 0);
       
-      if (!media) {
-        await interaction.editReply(`no media found with id ${mediaId} (ノಠ益ಠ)ノ彡┻━┻`);
+      if (!mediaData || mediaData.length === 0) {
+        await interaction.editReply({ content: 'Media not found (￣ヘ￣)' });
         return;
       }
+      
+      const media = mediaData[0]; // Extract first item from the array
       
       const success = await db.deleteMediaAnswer(answerId!);
       
