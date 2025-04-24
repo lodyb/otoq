@@ -88,12 +88,67 @@ export class EffectsManager {
       return params
     }
     
-    // check for raw filter syntax with {} braces
+    // check for raw filter syntax with {} braces - BEFORE period splitting
+    // this handles the case where filter params have periods like 0.8
     if (cmdText.includes('{') && cmdText.includes('}')) {
+      // separate the prefix parameters (before the brace) from the filter
+      const braceIndex = cmdText.indexOf('{')
+      
+      // if we have parameters before the brace, process them
+      if (braceIndex > 0) {
+        // only take the part before the brace for period splitting
+        const prefixPart = cmdText.substring(0, braceIndex)
+        
+        // if prefixPart has periods, parse them as normal params
+        if (prefixPart.includes('.')) {
+          // temporarily create a command with just the prefix part
+          const tempCmd = command.substring(0, command.indexOf('{'))
+          
+          // parse the prefix part normally
+          const tempParams = this.parseStandardCommand(tempCmd)
+          
+          // copy the parsed params
+          params.clipLength = tempParams.clipLength
+          params.startTime = tempParams.startTime
+          params.effects = tempParams.effects 
+          params.effectParams = tempParams.effectParams
+        }
+      }
+      
+      // now parse the filter part without interfering with periods inside braces
       return this.parseRawFilterCommand(command, params)
     }
 
-    // for standard format commands, continue with the original parsing logic
+    // for standard format commands (no braces), use standard parsing
+    return this.parseStandardCommand(command)
+  }
+  
+  /**
+   * parse standard command format without raw filters
+   * format: ..o.param1=value1.param2=value2 search term
+   */
+  private parseStandardCommand(command: string): CommandParams {
+    const params: CommandParams = {
+      effects: [],
+      clipLength: 10,
+      startTime: 0,
+      searchTerm: '',
+      effectParams: {},
+      rawFilters: null,
+      userId: null,
+      rawFilterType: null
+    }
+    
+    // extract command without prefix
+    let cmdText = command
+    const prefixes = ['..o', '..oc', '..of']
+    for (const prefix of prefixes) {
+      if (command.startsWith(prefix)) {
+        cmdText = command.substring(prefix.length)
+        break
+      }
+    }
+    
     // remove leading dot if present
     if (cmdText.startsWith('.')) {
       cmdText = cmdText.substring(1)
