@@ -279,58 +279,93 @@ export class AudioPlayerManager {
     }
   }
   
-  public async createRandomClip(filePath: string): Promise<string> {
-    // get file duration
-    const duration = await new Promise<number>((resolve, reject) => {
-      ffmpeg.ffprobe(filePath, (err, metadata) => {
-        if (err) {
-          reject(err);
-          return;
+  public async createRandomClip(filePath: string, options?: { clipLength?: number; startTime?: number }): Promise<string> {
+    try {
+      // use provided values or defaults
+      const clipLength = options?.clipLength || 10
+      let startTime = options?.startTime
+      
+      // if no start time provided, calculate random position
+      if (startTime === undefined) {
+        const duration = await this.getMediaDuration(filePath)
+        if (!duration) {
+          throw new Error('failed to get media duration')
         }
         
-        const durationSecs = metadata?.format?.duration || 0;
-        resolve(Math.floor(durationSecs));
-      });
-    });
-    
-    // clip specs
-    const CLIP_LENGTH = 10; // 10 seconds (changed from 30)
-    const maxStartTime = Math.max(0, duration - CLIP_LENGTH - 5); // leave 5 sec safety margin
-    
-    if (maxStartTime <= 0) {
-      // file too short, return original
-      return filePath;
+        // generate random start time, leaving room for clip
+        const maxStart = Math.max(0, duration / 1000 - clipLength)
+        startTime = maxStart > 0 ? Math.random() * maxStart : 0
+      }
+      
+      // make sure temp dir exists
+      if (!fs.existsSync('/tmp/otoq')) {
+        fs.mkdirSync('/tmp/otoq', { recursive: true })
+      }
+      
+      // generate output path with same extension
+      const outputPath = `/tmp/otoq/clip_${Date.now()}${path.extname(filePath)}`
+      
+      // use fluent-ffmpeg API for test compatibility
+      return new Promise((resolve, reject) => {
+        ffmpeg(filePath)
+          .seekInput(startTime)
+          .duration(clipLength)
+          .output(outputPath)
+          .on('error', (err) => {
+            console.error('error creating clip:', err)
+            reject(err)
+          })
+          .on('end', () => {
+            resolve(outputPath)
+          })
+          .run()
+      })
+    } catch (error) {
+      console.error('failed to create random clip:', error)
+      return filePath
     }
-    
-    // pick random start time
-    const startTime = Math.floor(Math.random() * maxStartTime);
-    console.log(`creating clip from ${startTime}s to ${startTime + CLIP_LENGTH}s`);
-    
-    // create temp file
-    const ext = path.extname(filePath);
-    const tempFile = path.join(process.cwd(), 'temp', `clip_${Date.now()}${ext}`);
-    
-    // ensure temp dir exists
-    const tempDir = path.dirname(tempFile);
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+  }
+
+  // create a clip with effects
+  public async createClipWithEffects(
+    filePath: string, 
+    params: import('./effectsManager').CommandParams
+  ): Promise<string> {
+    try {
+      // make sure temp dir exists
+      if (!fs.existsSync('/tmp/otoq')) {
+        fs.mkdirSync('/tmp/otoq', { recursive: true })
+      }
+      
+      // generate unique output file
+      const ext = params.effects.length > 0 ? '.mp4' : path.extname(filePath)
+      const outputPath = `/tmp/otoq/clip_${Date.now()}${ext}`
+      
+      const effectsManager = (await import('./effectsManager')).EffectsManager.getInstance()
+      
+      // if no effects, just use createRandomClip with custom length
+      if (params.effects.length === 0) {
+        return this.createRandomClip(filePath, {
+          clipLength: params.clipLength,
+          startTime: params.startTime
+        })
+      }
+      
+      // build ffmpeg command with effects
+      const ffmpegCommand = effectsManager.getFFmpegCommand(
+        filePath,
+        outputPath,
+        params
+      )
+      
+      // run command
+      await this.execCommand(ffmpegCommand)
+      
+      return outputPath
+    } catch (error) {
+      console.error('failed to create clip with effects:', error)
+      return this.createRandomClip(filePath)
     }
-    
-    // create clip
-    return new Promise((resolve, reject) => {
-      ffmpeg(filePath)
-        .seekInput(startTime)
-        .duration(CLIP_LENGTH)
-        .output(tempFile)
-        .on('error', (err) => {
-          console.error(`clip creation error: ${err}`);
-          reject(err);
-        })
-        .on('end', () => {
-          resolve(tempFile);
-        })
-        .run();
-    });
   }
   
   public stopPlaying(guildId: string): void {
@@ -474,10 +509,36 @@ export class AudioPlayerManager {
     this.onHintCallbacks.set(guildId, callback);
   }
   
-  private async getMediaDuration(mediaId: number, filePath: string): Promise<number> {
+  // overload methods for different ways to get duration
+  public async getMediaDuration(filePath: string): Promise<number>
+  public async getMediaDuration(mediaId: number, filePath: string): Promise<number>
+  public async getMediaDuration(mediaIdOrPath: number | string, filePath?: string): Promise<number> {
+    // if first arg is string, it's a direct file path
+    if (typeof mediaIdOrPath === 'string') {
+      return new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(mediaIdOrPath, (err, metadata) => {
+          if (err) {
+            reject(err)
+            return
+          }
+          
+          const duration = Math.floor((metadata?.format?.duration || 0) * 1000)
+          resolve(duration)
+        })
+      })
+    }
+    
+    // if we get here, first arg is mediaId
+    const mediaId = mediaIdOrPath
+    
     // return cached duration if available
     if (this.mediaDurations.has(mediaId)) {
-      return this.mediaDurations.get(mediaId) || 0;
+      return this.mediaDurations.get(mediaId) || 0
+    }
+    
+    // we need valid file path
+    if (!filePath) {
+      return 0
     }
     
     return new Promise((resolve, reject) => {
@@ -794,5 +855,21 @@ export class AudioPlayerManager {
     }
     
     return null;
+  }
+
+  // run ffmpeg command (useful for effects processing)
+  public async execCommand(command: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const { exec } = require('child_process')
+      exec(command, (error: any, stdout: string, stderr: string) => {
+        if (error) {
+          console.error(`ffmpeg error: ${error.message}`)
+          console.error(`stderr: ${stderr}`)
+          reject(error)
+          return
+        }
+        resolve()
+      })
+    })
   }
 }
