@@ -64,27 +64,11 @@ export class EffectsManager {
       rawFilterType: null
     }
 
-    // for special test cases - hardcoded inputs to match test expectations
-    if (command.includes('vibrato=f=10:d=0.8') && 
-        command.includes('bass=g=25') && 
-        command.includes('treble=g=-10')) {
-      params.rawFilters = 'vibrato=f=10:d=0.8,bass=g=25,treble=g=-10'
-      params.rawFilterType = 'both'
-      params.clipLength = 8
-      params.startTime = 45
-      
-      // simulate search term extraction
-      const searchStart = command.indexOf('}')
-      if (searchStart > 0) {
-        params.searchTerm = command.substring(searchStart + 1).trim()
-      }
-      
-      return params
-    }
-
     // trim and get command prefix type
     let content = command.trim()
     let filterType: 'audio' | 'video' | 'both' = 'both'
+    
+    console.log(`parsing command: ${content}`)
     
     // extract command type and clip length parameters from prefix
     if (content.startsWith('..oa')) {
@@ -103,7 +87,9 @@ export class EffectsManager {
       } else {
         content = content.substring(4)
       }
-    } else if (content.startsWith('..oc') || content.startsWith('..of')) {
+    } else if (content.startsWith('..oc')) {
+      content = content.substring(4)
+    } else if (content.startsWith('..of')) {
       content = content.substring(4)
     } else if (content.startsWith('..o')) {
       content = content.substring(3)
@@ -117,10 +103,12 @@ export class EffectsManager {
       // we have filters in braces
       const filterContent = braceMatch[0].slice(1, -1) // remove { }
       
-      // check if it's a raw filter or parameter list
-      if (this.isValidRawFilter(filterContent)) {
-        // treat as raw ffmpeg filter string
-        params.rawFilters = this.fixComplexTestFilter(filterContent)
+      console.log(`found filter content in braces: ${filterContent}`)
+      
+      // assume any filter with = and : is a raw filter
+      if (filterContent.includes('=') && filterContent.includes(':')) {
+        console.log(`treating as raw ffmpeg filter string: ${filterContent}`)
+        params.rawFilters = filterContent
         params.rawFilterType = filterType
       } else {
         // parse as key=value pairs
@@ -225,6 +213,15 @@ export class EffectsManager {
     
     // trim content for search term
     params.searchTerm = content.trim()
+    
+    console.log(`parsed params:`, JSON.stringify({
+      clipLength: params.clipLength,
+      startTime: params.startTime,
+      effects: params.effects,
+      rawFilters: params.rawFilters,
+      rawFilterType: params.rawFilterType,
+      searchTerm: params.searchTerm
+    }))
     
     return params
   }
@@ -516,6 +513,13 @@ export class EffectsManager {
 
   // get complete ffmpeg command string
   public getFFmpegCommand(inputPath: string, outputPath: string, params: CommandParams): string {
+    // debug log parameter info
+    console.log(`building ffmpeg command with params: ${JSON.stringify({
+      rawFilters: params.rawFilters,
+      rawFilterType: params.rawFilterType,
+      effectsLength: params.effects?.length
+    })}`)
+    
     // handle file extension correction
     const inputExt = path.extname(inputPath).toLowerCase()
     const outputExt = path.extname(outputPath).toLowerCase()
@@ -537,32 +541,33 @@ export class EffectsManager {
       cmd += ` -t ${params.clipLength}`
     }
     
-    // add audio filters
-    const audioFilter = this.buildAudioEffectsFilter(params.effects, params)
-    if (audioFilter) {
-      cmd += ` -af "${audioFilter}"`
-    }
-    
-    // add video filters for video files
-    if (!this.isAudioFile(inputExt)) {
-      const videoFilters = this.buildVideoEffectsFilter(params.effects, params)
-      if (videoFilters.length > 0) {
-        cmd += ` -vf "${videoFilters.join(',')}"`
-      }
-    }
-    
-    // for raw filters, we need to handle special case for both audio and video
-    if (params.rawFilters && params.rawFilterType === 'both') {
-      // override the filters with a special complex filter
-      if (this.isAudioFile(inputExt)) {
-        // for audio files, just apply to audio stream
-        cmd = cmd.replace(/ -af "[^"]*"/, '') // remove any -af
+    // handle raw filters first - they take precedence
+    if (params.rawFilters) {
+      console.log(`applying raw filters: ${params.rawFilters}`)
+      if (this.isAudioFile(inputExt) || params.rawFilterType === 'audio') {
+        // for audio files or audio-only filters
         cmd += ` -af "${params.rawFilters}"`
+      } else if (params.rawFilterType === 'video') {
+        // video-only filters
+        cmd += ` -vf "${params.rawFilters}"`
       } else {
-        // for video files, need more complex handling
-        cmd = cmd.replace(/ -af "[^"]*"/, '') // remove any -af
-        cmd = cmd.replace(/ -vf "[^"]*"/, '') // remove any -vf
+        // both audio and video (filter_complex)
         cmd += ` -filter_complex "${params.rawFilters}"`
+      }
+    } else {
+      // no raw filters, use standard effect processing
+      // add audio filters
+      const audioFilter = this.buildAudioEffectsFilter(params.effects, params)
+      if (audioFilter) {
+        cmd += ` -af "${audioFilter}"`
+      }
+      
+      // add video filters for video files
+      if (!this.isAudioFile(inputExt)) {
+        const videoFilters = this.buildVideoEffectsFilter(params.effects, params)
+        if (videoFilters.length > 0) {
+          cmd += ` -vf "${videoFilters.join(',')}"`
+        }
       }
     }
     
@@ -575,6 +580,8 @@ export class EffectsManager {
     
     // add output path with overwrite flag
     cmd += ` -y "${outputPath}"`
+    
+    console.log(`final ffmpeg command: ${cmd}`)
     
     return cmd
   }
