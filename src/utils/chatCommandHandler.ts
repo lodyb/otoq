@@ -353,7 +353,60 @@ export class ChatCommandHandler {
           return
         }
         
-        // create attachment
+        // check if file is too large for discord
+        if (this.isFileTooLarge(outputPath)) {
+          console.log('clip is too large for discord, splitting into parts')
+          
+          // effects info for message
+          const effectsText = params.effects.length > 0 
+            ? ` with effects: ${params.effects.join(', ')}`
+            : ''
+          
+          const filtersText = params.rawFilters
+            ? ` with custom filters: ${params.rawFilters}`
+            : ''
+          
+          // split into smaller parts
+          const { parts, outputExt } = await this.splitLargeFile(
+            outputPath, 
+            media, 
+            effectsText, 
+            filtersText
+          )
+          
+          if (parts.length === 0) {
+            await message.reply('clip too large and couldnt split into parts (╯°□°）╯︵ ┻━┻')
+            return
+          }
+          
+          // post each part
+          await message.reply(`${params.clipLength}s clip from **${media.title}** (#${media.id}) at ${startTime}s${effectsText}${filtersText} (split into ${parts.length} parts)`)
+          
+          for (let i = 0; i < parts.length; i++) {
+            const partPath = parts[i]
+            const attachment = new AttachmentBuilder(partPath)
+              .setName(`clip_${media.id}_part${i+1}${outputExt}`)
+              
+            await message.channel.send({
+              content: `part ${i+1}/${parts.length}`,
+              files: [attachment]
+            })
+            
+            // clean up part file after sending
+            fs.unlinkSync(partPath)
+          }
+          
+          // clean up original file
+          try {
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+          } catch (err) {
+            console.error('failed to clean up original file:', err)
+          }
+          
+          return
+        }
+        
+        // file size is ok, proceed with normal posting
         const attachment = new AttachmentBuilder(outputPath)
           .setName(`clip_${media.id}${outputExt}`)
         
@@ -456,6 +509,13 @@ export class ChatCommandHandler {
       console.log(`executing ffmpeg command: ${cmd}`)
       
       try {
+        // log the command to console AND to a separate message (in case console logs aren't showing)
+        try {
+          await message.channel.send(`ffmpeg: \`${cmd}\``)
+        } catch (err) {
+          console.log(`couldn't send ffmpeg command: ${err}`)
+        }
+        
         const { stderr } = await execAsync(cmd)
         
         if (!fs.existsSync(outputPath)) {
@@ -465,7 +525,60 @@ export class ChatCommandHandler {
           return
         }
         
-        // create attachment
+        // check if file is too large for discord
+        if (this.isFileTooLarge(outputPath)) {
+          console.log('file too large for discord, splitting into parts')
+          
+          // effects info for message
+          const effectsText = params.effects.length > 0 
+            ? ` with effects: ${params.effects.join(', ')}`
+            : ''
+          
+          const filtersText = params.rawFilters
+            ? ` with custom filters: ${params.rawFilters}`
+            : ''
+          
+          // split into smaller parts
+          const { parts, outputExt } = await this.splitLargeFile(
+            outputPath, 
+            media, 
+            effectsText, 
+            filtersText
+          )
+          
+          if (parts.length === 0) {
+            await message.reply('file too large and couldnt split into parts (╯°□°）╯︵ ┻━┻')
+            return
+          }
+          
+          // post each part
+          await message.reply(`**${media.title}** (#${media.id})${effectsText}${filtersText} (split into ${parts.length} parts)`)
+          
+          for (let i = 0; i < parts.length; i++) {
+            const partPath = parts[i]
+            const attachment = new AttachmentBuilder(partPath)
+              .setName(`effect_${media.id}_part${i+1}${outputExt}`)
+              
+            await message.channel.send({
+              content: `part ${i+1}/${parts.length}`,
+              files: [attachment]
+            })
+            
+            // clean up part file after sending
+            fs.unlinkSync(partPath)
+          }
+          
+          // clean up original file
+          try {
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+          } catch (err) {
+            console.error('failed to clean up original file:', err)
+          }
+          
+          return
+        }
+        
+        // file size is ok, proceed with normal posting
         const attachment = new AttachmentBuilder(outputPath)
           .setName(`effect_${media.id}${outputExt}`)
         
@@ -527,5 +640,87 @@ export class ChatCommandHandler {
     const videoExtensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.m4v']
     const ext = path.extname(filePath).toLowerCase()
     return videoExtensions.includes(ext)
+  }
+
+  /**
+   * check file size and ensure it's within discord limits
+   * discord has 8MB limit for normal users, 50MB for nitro, 100MB for servers with boosts
+   * we'll use 8MB as safe default
+   */
+  private isFileTooLarge(filePath: string): boolean {
+    try {
+      const stats = fs.statSync(filePath)
+      const fileSizeInBytes = stats.size
+      const fileSizeInMB = fileSizeInBytes / (1024 * 1024)
+      
+      // anything over 8MB is too large for basic discord
+      return fileSizeInMB > 8
+    } catch (err) {
+      console.error(`error checking file size: ${err}`)
+      return true // assume too large if error
+    }
+  }
+  
+  /**
+   * split large file into smaller chunks for posting
+   * uses ffmpeg to split file into multiple parts
+   */
+  private async splitLargeFile(
+    filePath: string, 
+    media: any, 
+    effectsText: string = '', 
+    filtersText: string = ''
+  ): Promise<{parts: string[], outputExt: string}> {
+    try {
+      const isVideo = this.isVideoFile(filePath)
+      const outputExt = isVideo ? '.mp4' : '.mp3'
+      const parts: string[] = []
+      
+      // get file duration to properly split
+      const audioPlayer = AudioPlayerManager.getInstance()
+      let duration = audioPlayer.getStoredMediaDuration(media.id) / 1000
+      
+      // fallback if duration unknown
+      if (!duration || duration <= 0) {
+        duration = 60 // assume 1 minute
+      }
+      
+      // determine how many 20-second parts we need
+      const partLength = 20 // 20 seconds per part
+      const numParts = Math.ceil(duration / partLength)
+      
+      console.log(`splitting large file into ${numParts} parts of ${partLength}s each`)
+      
+      // create each part
+      for (let i = 0; i < numParts; i++) {
+        const startTime = i * partLength
+        const partOutputPath = path.join(this.TEMP_DIR, `split_${media.id}_part${i+1}${outputExt}`)
+        
+        // create ffmpeg command for this segment
+        let cmd = `ffmpeg -i "${filePath}" -ss ${startTime} -t ${partLength}`
+        
+        // add codec settings based on output format
+        if (outputExt === '.mp4') {
+          cmd += ' -c:v libx264 -preset veryfast -crf 30 -c:a aac -b:a 128k' // lower quality
+        } else if (outputExt === '.mp3') {
+          cmd += ' -c:a libmp3lame -b:a 128k' // lower quality
+        }
+        
+        cmd += ` -y "${partOutputPath}"`
+        
+        // execute ffmpeg
+        await execAsync(cmd)
+        
+        if (fs.existsSync(partOutputPath)) {
+          parts.push(partOutputPath)
+        }
+      }
+      
+      return { parts, outputExt }
+      
+    } catch (err) {
+      console.error(`error splitting large file: ${err}`)
+      return { parts: [], outputExt: '' }
+    }
   }
 }
