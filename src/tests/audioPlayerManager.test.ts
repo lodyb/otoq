@@ -395,4 +395,70 @@ describe('AudioPlayerManager', () => {
     expect((audioPlayerManager as any).cleanupTempFile).toHaveBeenCalledWith(mockScreencapPath);
     expect((audioPlayerManager as any).mediaScreencaps.has(42)).toBe(false);
   });
+
+  test('should create random clip with 10s duration', async () => {
+    // mock the ffprobe result for a 60 second file
+    const ffmpegMock = require('fluent-ffmpeg');
+    (ffmpegMock as any).ffprobe.mockImplementationOnce((path: string, callback: any) => {
+      callback(null, {
+        format: { duration: 60.0 } // 60 seconds
+      });
+    });
+    
+    // mock the run method to call the end callback
+    const mockRunImplementation = jest.fn().mockImplementation(function(this: any) {
+      const endCallback = this.on.mock.calls.find((call: any[]) => call[0] === 'end')[1];
+      if (endCallback) endCallback();
+    });
+    
+    const mockFfmpegInstance = {
+      seekInput: jest.fn().mockReturnThis(),
+      duration: jest.fn().mockReturnThis(),
+      output: jest.fn().mockReturnThis(),
+      on: jest.fn().mockImplementation(function(this: any, event: string, callback: any) {
+        return this;
+      }),
+      run: mockRunImplementation
+    };
+    
+    ffmpegMock.mockReturnValueOnce(mockFfmpegInstance);
+    
+    // call our method
+    const result = await audioPlayerManager.createRandomClip('/path/to/file.mp3');
+    
+    // should return a path
+    expect(result).toBeDefined();
+    
+    // should have called ffmpeg with correct duration (10 seconds)
+    expect(mockFfmpegInstance.duration).toHaveBeenCalledWith(10);
+  });
+
+  test('should get random screencap direct without fail chance', async () => {
+    // override the private extractRandomFrame method
+    const mockScreencapPath = '/path/to/temp/screencap_123456.jpg';
+    (audioPlayerManager as any).extractRandomFrame = jest.fn().mockResolvedValue(mockScreencapPath);
+    (audioPlayerManager as any).isVideoFile = jest.fn().mockReturnValue(true);
+    
+    // setup mediaScreencaps map
+    (audioPlayerManager as any).mediaScreencaps = new Map();
+    
+    // call getRandomScreencapDirect - should always return a frame without random chance of null
+    const result = await audioPlayerManager.getRandomScreencapDirect(42, 'video.mp4');
+    
+    // verify screencap path was returned and saved
+    expect(result).toBe(mockScreencapPath);
+    expect((audioPlayerManager as any).mediaScreencaps.get(42)).toBe(mockScreencapPath);
+    
+    // Math.random shouldn't affect the result
+    // simulate the worst case scenario with Math.random() = 1.0 that would normally return null
+    const originalRandom = Math.random;
+    Math.random = jest.fn().mockReturnValue(1.0);
+    
+    // should still return a frame
+    const secondResult = await audioPlayerManager.getRandomScreencapDirect(43, 'video.mp4');
+    expect(secondResult).toBe(mockScreencapPath);
+    
+    // restore Math.random
+    Math.random = originalRandom;
+  });
 });

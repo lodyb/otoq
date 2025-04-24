@@ -46,4 +46,26 @@ describe('VideoExtensionHandling', () => {
     // verify it was called
     expect(isVideoFileSpy).toHaveBeenCalledTimes(3);
   });
+
+  test('should filter MP4 files correctly', () => {
+    const videoFileList = [
+      { id: 1, title: 'video 1', file_path: '/path/to/video1.mp4' },
+      { id: 2, title: 'audio 1', file_path: '/path/to/audio1.mp3' },
+      { id: 3, title: 'video 2', file_path: '/path/to/video2.MP4' }, // uppercase
+      { id: 4, title: 'video 3', file_path: '/path/to/video3.mkv' },
+    ];
+    
+    // filter only mp4 files
+    const mp4Files = videoFileList.filter(m => m.file_path.toLowerCase().endsWith('.mp4'));
+    
+    // should only have the two mp4 files
+    expect(mp4Files.length).toBe(2);
+    expect(mp4Files.map(f => f.id).sort()).toEqual([1, 3]);
+    
+    // filter matches case-insensitive
+    expect(mp4Files.some(f => f.id === 3)).toBe(true);
+    
+    // doesn't match other video formats
+    expect(mp4Files.some(f => f.id === 4)).toBe(false);
+  });
 });

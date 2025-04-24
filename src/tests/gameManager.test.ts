@@ -267,4 +267,24 @@ describe('GameManager', () => {
     expect(players.length).toBe(1);
     expect(players[0].score).toBe(1);
   });
+
+  test('should support clipMode parameter', async () => {
+    // start clean
+    (gameManager as any).sessions.clear();
+    
+    // create with clipMode true
+    const withClipMode = await gameManager.createSession('guild1', 'channel1', 2, undefined, undefined, undefined, undefined, true);
+    
+    // verify clipMode was passed
+    expect(withClipMode?.isClipMode()).toBe(true);
+    
+    // cleanup
+    (gameManager as any).sessions.clear();
+    
+    // create without specifying clipMode (defaults to false)
+    const withoutClipMode = await gameManager.createSession('guild1', 'channel1', 2);
+    
+    // verify default clipMode is false
+    expect(withoutClipMode?.isClipMode()).toBe(false);
+  });
 });

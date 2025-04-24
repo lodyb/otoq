@@ -113,4 +113,18 @@ describe('GameSession', () => {
     session.nextRound();
     expect(session.getSkipVotes()).toBe(0);
   });
+
+  test('should init with clipMode and return correct value', () => {
+    // without clipMode (default false)
+    const defaultSession = new GameSession(123, 'guild1', 'channel1', mockPlaylist, 3);
+    expect(defaultSession.isClipMode()).toBe(false);
+    
+    // with clipMode explicitly set to true
+    const clipSession = new GameSession(123, 'guild1', 'channel1', mockPlaylist, 3, true);
+    expect(clipSession.isClipMode()).toBe(true);
+    
+    // with clipMode explicitly set to false
+    const noClipSession = new GameSession(123, 'guild1', 'channel1', mockPlaylist, 3, false);
+    expect(noClipSession.isClipMode()).toBe(false);
+  });
 });

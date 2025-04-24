@@ -210,17 +210,32 @@ export class AudioPlayerManager {
       const filePath = await this.getNormalizedPath(media);
       this.trackTempFile(guildId, filePath);
       
-      const resource = createAudioResource(filePath);
+      // create clip if clipMode is true
+      let finalPath = filePath;
+      if (clipMode) {
+        try {
+          console.log(`creating random 10-sec clip for media #${media.id}`);
+          finalPath = await this.createRandomClip(filePath);
+          this.trackTempFile(guildId, finalPath);
+        } catch (err) {
+          console.error(`failed to create clip: ${err}, using full file`);
+        }
+      }
+      
+      const resource = createAudioResource(finalPath);
       player.play(resource);
       
-      // get duration for hint system
+      // get duration for hint system - for full file, not clip
       const duration = await this.getMediaDuration(media.id, media.file_path);
       
       // set up hint timers
       this.setupHintTimers(guildId, media, duration);
       
-      // set up timeout in case audio end event doesn't fire
-      const timeoutMs = Math.max(duration + 15000, 35000);
+      // set up timeout - shorter for clips
+      const timeoutMs = clipMode 
+        ? Math.max(30000, 15000) // for clips: at least 15s, normally 30s
+        : Math.max(duration + 15000, 35000); // for full files
+      
       const timeoutTimer = setTimeout(() => {
         console.log(`timeout triggered for media #${media.id}`);
         this.handlePlaybackEnd(guildId);
@@ -228,7 +243,7 @@ export class AudioPlayerManager {
       
       this.timeoutTimer.set(guildId, timeoutTimer);
       
-      console.log(`playing media #${media.id} (${duration}ms) ${media.normalized_path ? 'using pre-normalized file' : 'using on-the-fly normalization'}`);
+      console.log(`playing media #${media.id} ${clipMode ? '(10s clip)' : `(${duration}ms)`} ${media.normalized_path ? 'using pre-normalized file' : 'using on-the-fly normalization'}`);
       return true;
     } catch (err) {
       console.error(`failed to play media #${media.id}: ${err}`);
@@ -264,7 +279,7 @@ export class AudioPlayerManager {
     }
   }
   
-  private async createRandomClip(filePath: string): Promise<string> {
+  public async createRandomClip(filePath: string): Promise<string> {
     // get file duration
     const duration = await new Promise<number>((resolve, reject) => {
       ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -279,7 +294,7 @@ export class AudioPlayerManager {
     });
     
     // clip specs
-    const CLIP_LENGTH = 30; // 30 seconds
+    const CLIP_LENGTH = 10; // 10 seconds (changed from 30)
     const maxStartTime = Math.max(0, duration - CLIP_LENGTH - 5); // leave 5 sec safety margin
     
     if (maxStartTime <= 0) {
@@ -749,6 +764,29 @@ export class AudioPlayerManager {
     if (Math.random() > 0.85) return null;
     
     // extract a random frame
+    const screencapPath = await this.extractRandomFrame(filePath);
+    if (screencapPath) {
+      this.mediaScreencaps.set(mediaId, screencapPath);
+      return screencapPath;
+    }
+    
+    return null;
+  }
+
+  public async getRandomScreencapDirect(mediaId: number, filePath: string): Promise<string | null> {
+    // return cached screencap if exists
+    if (this.mediaScreencaps.has(mediaId)) {
+      const screencapPath = this.mediaScreencaps.get(mediaId)!;
+      if (fs.existsSync(screencapPath)) {
+        return screencapPath;
+      }
+      this.mediaScreencaps.delete(mediaId);
+    }
+    
+    // check if this is a video file
+    if (!this.isVideoFile(filePath)) return null;
+    
+    // extract a random frame - no random chance of failing
     const screencapPath = await this.extractRandomFrame(filePath);
     if (screencapPath) {
       this.mediaScreencaps.set(mediaId, screencapPath);

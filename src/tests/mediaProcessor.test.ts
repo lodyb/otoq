@@ -12,42 +12,37 @@ interface MediaItemToProcess {
 
 // mock dependencies
 jest.mock('fluent-ffmpeg', () => {
+  // simpler mock implementation to avoid memory issues
   const mockFfmpegInstance = {
     audioFilters: jest.fn().mockReturnThis(),
     format: jest.fn().mockReturnThis(),
     output: jest.fn().mockReturnThis(),
     outputOptions: jest.fn().mockReturnThis(),
     on: jest.fn().mockImplementation(function(this: any, event: string, callback: any) {
-      if (event === 'end') callback(null, 'max_volume: -10.0 dB')
+      if (event === 'end') setTimeout(() => callback(null, 'max_volume: -10.0 dB'), 0)
       return this
     }),
-    run: jest.fn()
+    run: jest.fn().mockImplementation(function(this: any) {
+      const endCallback = this.on.mock.calls.find((call: any[]) => call[0] === 'end')?.[1]
+      if (endCallback) setTimeout(() => endCallback(), 0)
+    })
   }
   
   const ffmpegMock = jest.fn().mockReturnValue(mockFfmpegInstance)
   
-  // mock the ffprobe function to return different metadata for different file types
+  // simplified ffprobe mock
   ;(ffmpegMock as any).ffprobe = jest.fn().mockImplementation((filePath: string, callback: any) => {
     const ext = path.extname(filePath).toLowerCase()
     const duration = ext === '.webm' || ext === '.mkv' || ext === '.m4a' ? 45.5 : 30.5
     
-    // return video stream data for video files, audio only for mp3
-    if (ext === '.mp3') {
+    setTimeout(() => {
       callback(null, {
         format: { duration },
         streams: [
-          { codec_type: 'audio' }
+          { codec_type: ext === '.mp3' ? 'audio' : 'video' }
         ]
       })
-    } else {
-      callback(null, {
-        format: { duration },
-        streams: [
-          { codec_type: 'video', width: 1920, height: 1080 },
-          { codec_type: 'audio' }
-        ]
-      })
-    }
+    }, 0)
   })
   
   return ffmpegMock

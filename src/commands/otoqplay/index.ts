@@ -20,7 +20,7 @@ export const data = new SlashCommandBuilder()
   )
   .addBooleanOption(option => 
     option.setName('clip')
-      .setDescription('play a random 30s clip instead of full track')
+      .setDescription('play a random 10s clip instead of full track')
       .setRequired(false)
   );
 

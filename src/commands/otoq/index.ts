@@ -42,7 +42,7 @@ export const data = new SlashCommandBuilder()
   )
   .addBooleanOption(option =>
     option.setName('clip')
-      .setDescription('play random 30s clips instead of full tracks')
+      .setDescription('play random 10s clips instead of full tracks')
       .setRequired(false)
   );
 
@@ -270,7 +270,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
   
   if (clipMode) {
-    embed.addFields({ name: 'mode', value: 'playing random 30s clips' });
+    embed.addFields({ name: 'mode', value: 'playing random 10s clips' });
   }
   
   // send public game message
