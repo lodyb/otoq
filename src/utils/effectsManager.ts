@@ -25,7 +25,7 @@ export class EffectsManager {
     'flanger', 'haas', 'hdcd', 'highpass', 'join', 'loudnorm', 'lowpass',
     'mcompand', 'pan', 'phaser', 'aphaser', 'apulsator', 'reverb', 'sidechaincompress', 
     'silenceremove', 'stereotools', 'stereowiden', 'superequalizer', 'surround', 
-    'tremolo', 'vibrato', 'volume', 'volumedetect',
+    'treble', 'asetrate', 'tremolo', 'vibrato', 'volume', 'volumedetect',
     
     // video filters
     'amplify', 'boxblur', 'colorbalance', 'colorchannelmixer', 'colorlevels',
@@ -193,26 +193,78 @@ export class EffectsManager {
    * format: ..o{filter1=param1=val1:param2=val2,filter2=param=val} search term
    */
   private parseRawFilterCommand(command: string, params: CommandParams): CommandParams {
-    // find opening and closing brace positions
-    const openBrace = command.indexOf('{')
-    const closeBrace = command.indexOf('}')
+    // find opening and closing brace positions for the first filter group
+    const firstOpenBrace = command.indexOf('{')
+    const firstCloseBrace = command.indexOf('}', firstOpenBrace)
     
-    if (openBrace === -1 || closeBrace === -1 || closeBrace < openBrace) {
+    if (firstOpenBrace === -1 || firstCloseBrace === -1 || firstCloseBrace < firstOpenBrace) {
       // malformed braces, fall back to normal parsing
       return this.parseCommandString(command.replace(/{|}/g, ''))
     }
     
-    // extract raw filter string
-    const rawFilterStr = command.substring(openBrace + 1, closeBrace)
+    // get the prefix part before the first filter
+    const prefixPart = command.substring(0, firstOpenBrace)
     
-    // extract search term if any (after the closing brace)
-    if (closeBrace + 1 < command.length) {
-      params.searchTerm = command.substring(closeBrace + 1).trim()
+    // extract the first raw filter string
+    const firstFilterStr = command.substring(firstOpenBrace + 1, firstCloseBrace)
+    
+    // look for a second filter group
+    let remainingText = command.substring(firstCloseBrace + 1)
+    let secondFilterStr = null
+    
+    // if there's another opening brace, we have a second filter group
+    if (remainingText.includes('{') && remainingText.includes('}')) {
+      const secondOpenBrace = remainingText.indexOf('{')
+      const secondCloseBrace = remainingText.indexOf('}')
+      
+      if (secondOpenBrace !== -1 && secondCloseBrace !== -1 && secondCloseBrace > secondOpenBrace) {
+        secondFilterStr = remainingText.substring(secondOpenBrace + 1, secondCloseBrace)
+        // extract search term after the second filter group
+        if (secondCloseBrace + 1 < remainingText.length) {
+          params.searchTerm = remainingText.substring(secondCloseBrace + 1).trim()
+        }
+      } else {
+        // only one valid filter group, use original remainder as search term
+        params.searchTerm = remainingText.trim()
+      }
+    } else {
+      // only one filter group, use remainder as search term
+      params.searchTerm = remainingText.trim()
+    }
+    
+    // parse standard params before the filter braces
+    // check for params like c=10, s=30 in the prefix part
+    if (prefixPart.includes('.')) {
+      const parts = prefixPart.split('.')
+      
+      // first part is the command prefix (..o, ..oc, etc)
+      // remaining parts might be params
+      for (let i = 1; i < parts.length; i++) {
+        const part = parts[i]
+        
+        // look for param=value format
+        if (part.includes('=')) {
+          const [paramName, paramValue] = part.split('=')
+          
+          switch (paramName.toLowerCase()) {
+            case 'c':
+            case 'clip':
+            case 'length':
+              params.clipLength = parseFloat(paramValue) || 10
+              break
+              
+            case 's':
+            case 'start':
+              params.startTime = parseFloat(paramValue) || 0
+              break
+              
+            // ignore effect params before braces
+          }
+        }
+      }
     }
     
     // determine filter type - check for a prefix before the {
-    const prefixPart = command.substring(0, openBrace)
-    
     // check for video-specific filter prefix
     if (prefixPart.endsWith('v')) {
       params.rawFilterType = 'video'
@@ -226,10 +278,17 @@ export class EffectsManager {
       params.rawFilterType = 'both'
     }
     
-    // validate and process the raw filter string
-    const validatedFilter = this.validateRawFilter(rawFilterStr)
+    // validate and process the first raw filter string
+    const validatedFilter = this.validateRawFilter(firstFilterStr)
     if (validatedFilter) {
       params.rawFilters = validatedFilter
+    }
+    
+    // if we have a second filter, it goes in the search term for now
+    // the effectsManager.ts doesn't currently support two independent filter groups
+    if (secondFilterStr) {
+      // prepend second filter group to search term with braces
+      params.searchTerm = `{${secondFilterStr}} ${params.searchTerm || ''}`.trim()
     }
     
     return params

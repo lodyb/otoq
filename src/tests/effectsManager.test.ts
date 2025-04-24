@@ -408,9 +408,8 @@ describe('EffectsManager', () => {
       const cmd = '..o{asetrate=44100*0.8,atempo=0.8,aecho=0.8:0.8:1000:0.7,bass=g=10}{hue=h=220:s=3,vignette=angle=PI/4,eq=brightness=0.1:saturation=2:gamma=0.8}'
       const result = effectsManager.parseCommandString(cmd)
       
-      // our current implementation only processes the first filter group
-      // and has an issue with the asetrate filter
-      expect(result.rawFilters).toBe('atempo=0.8,aecho=0.8:0.8:1000:0.7,bass=g=10')
+      // our implementation now correctly handles asetrate filter and preserves all filters in the first group
+      expect(result.rawFilters).toBe('asetrate=44100*0.8,atempo=0.8,aecho=0.8:0.8:1000:0.7,bass=g=10')
       expect(result.rawFilterType).toBe('both')
     })
     
@@ -418,13 +417,11 @@ describe('EffectsManager', () => {
       const cmd = '..oc.c=8.s=45{vibrato=f=10:d=0.8,aecho=0.8:0.5:500|1000|1500:0.5|0.3|0.2,bass=g=25,treble=g=-10}{hue=\'H=2PIt/10\':s=2,edgedetect=mode=colormix:high=0,drawgrid=width=16:height=16:color=white@0.5} best guitar solo ever'
       const result = effectsManager.parseCommandString(cmd)
       
-      // verify the complex filter - note that our parser currently has limitations
-      // with some complex filter parameters and doesn't properly process params before braces
-      expect(result.rawFilters).toBe('vibrato=f=10:d=0.8,bass=g=25')
+      // our implementation now correctly processes params before braces and supports treble filter
+      expect(result.rawFilters).toBe('vibrato=f=10:d=0.8,bass=g=25,treble=g=-10')
       expect(result.rawFilterType).toBe('both')
-      expect(result.clipLength).toBe(10) // defaults to 10 because current implementation doesn't handle params before braces
-      expect(result.startTime).toBe(0)   // defaults to 0 because current implementation doesn't handle params before braces
-      // the current implementation doesn't properly separate the second filter group from the search term
+      expect(result.clipLength).toBe(8) // correctly parses c=8 param
+      expect(result.startTime).toBe(45) // correctly parses s=45 param
       expect(result.searchTerm).toBe('{hue=\'H=2PIt/10\':s=2,edgedetect=mode=colormix:high=0,drawgrid=width=16:height=16:color=white@0.5} best guitar solo ever')
     })
     
