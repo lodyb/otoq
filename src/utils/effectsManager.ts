@@ -299,15 +299,14 @@ export class EffectsManager {
    */
   private hasDangerousChars(input: string): boolean {
     // character blacklist for shell command injection
+    // only block actual dangerous shell characters, not ffmpeg filter chars
     const dangerousPatterns = [
-      // shell escape sequences
-      ';', '&', '|', '`', '$', '\\', 
+      // shell escape sequences and command chaining
+      ';', '&', '|', '`', 
       // redirection
       '>', '<',
       // quotes that could break out of our ffmpeg string
       '"', "'",
-      // parentheses that could be used in shell scripting
-      '(', ')'
     ]
     
     return dangerousPatterns.some(pattern => input.includes(pattern))
