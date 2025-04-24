@@ -104,7 +104,8 @@ export class ChatCommandHandler {
       
       // check if file exists
       if (!fs.existsSync(filePath)) {
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${prevMedia.id}`);
+        console.error(`media file not found: ${filePath} (id: ${prevMedia.id})`);
+        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${prevMedia.id}, path: ${filePath}`);
         return;
       }
       
@@ -154,7 +155,8 @@ export class ChatCommandHandler {
       
       // check if file exists
       if (!fs.existsSync(filePath)) {
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`);
+        console.error(`media file not found: ${filePath} (id: ${media.id})`);
+        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}, path: ${filePath}`);
         return;
       }
       
@@ -173,194 +175,166 @@ export class ChatCommandHandler {
   }
 
   private async handleRandomClipCommand(message: Message): Promise<void> {
-    // ignore bot messages and messages that don't start with prefix
-    if (message.author.bot || !message.content.startsWith(this.PREFIX_CLIP)) return;
+    if (message.author.bot || !message.content.startsWith(this.PREFIX_CLIP)) return
 
     try {
-      // extract search term (everything after the prefix and a space)
-      const searchTerm = message.content.slice(this.PREFIX_CLIP.length).trim();
+      const searchTerm = message.content.slice(this.PREFIX_CLIP.length).trim()
       
-      const db = DatabaseManager.getInstance();
-      let mediaItems = [];
+      const db = DatabaseManager.getInstance()
+      let mediaItems = []
       
-      // if no search term, get random media
       if (!searchTerm) {
-        mediaItems = await db.getRandomMedia(undefined, undefined, undefined, 1);
+        mediaItems = await db.getRandomMedia(undefined, undefined, undefined, 1)
       } else {
-        // search for media with matching title
-        mediaItems = await db.getMediaByTitle(searchTerm);
+        mediaItems = await db.getMediaByTitle(searchTerm)
       }
       
       if (mediaItems.length === 0) {
-        await message.reply(`no media found ${searchTerm ? `matching "${searchTerm}"` : ""} (￣︿￣)`);
-        return;
+        await message.reply(`no media found ${searchTerm ? `matching "${searchTerm}"` : ""} (￣︿￣)`)
+        return
       }
       
-      // use the first (best) match
-      const media = mediaItems[0];
+      const media = mediaItems[0]
       
-      // prefer normalized path if available
-      const filePath = media.normalized_path || media.file_path;
+      // use original file path NOT normalized
+      const filePath = media.file_path
       
-      // check if file exists
       if (!fs.existsSync(filePath)) {
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`);
-        return;
+        console.error(`media file not found: ${filePath} (id: ${media.id})`)
+        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`)
+        return
       }
       
-      // get audio player to create random clip
-      const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance();
+      const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance()
       
-      // show typing indicator where it exists
       try {
-        // use "as any" to bypass the type checking
-        const channel = message.channel as any;
+        const channel = message.channel as any
         if (channel.sendTyping) {
-          await channel.sendTyping();
+          await channel.sendTyping()
         }
       } catch (e) {
-        // ignore error
+        // whatever
       }
       
       try {
-        // create 10s clip
-        const clipPath = await audioPlayer.createRandomClip(filePath);
+        const clipPath = await audioPlayer.createRandomClip(filePath)
         if (!clipPath) {
-          await message.reply(`failed to create clip (╬ಠ益ಠ)`);
-          return;
+          await message.reply(`failed to create clip (╬ಠ益ಠ)`)
+          return
         }
         
-        // post the clip
-        const attachment = new AttachmentBuilder(clipPath, { name: `clip_${path.basename(filePath)}` });
+        const attachment = new AttachmentBuilder(clipPath, { name: `clip_${path.basename(filePath)}` })
         await message.reply({ 
           content: `random 10s clip from "${media.title}" (id: ${media.id}) (￣▽￣)`,
           files: [attachment] 
-        });
+        })
         
-        // cleanup temp file after a delay to ensure discord has time to process it
         setTimeout(() => {
           if (fs.existsSync(clipPath) && clipPath !== filePath) {
             try {
-              fs.unlinkSync(clipPath);
+              fs.unlinkSync(clipPath)
             } catch (err) {
-              console.error(`failed to clean up clip: ${err}`);
+              console.error(`failed to clean up clip: ${err}`)
             }
           }
-        }, 60000);
+        }, 60000)
       } catch (error) {
-        console.error('error creating/posting clip:', error);
-        await message.reply(`failed to create clip (╬ಠ益ಠ)`);
+        console.error('error creating/posting clip:', error)
+        await message.reply(`failed to create clip (╬ಠ益ಠ)`)
       }
     } catch (error) {
-      console.error('error handling clip command:', error);
-      await message.reply('something broke (╯°□°）╯︵ ┻━┻');
+      console.error('error handling clip command:', error)
+      await message.reply('something broke (╯°□°）╯︵ ┻━┻')
     }
   }
 
   private async handleRandomFrameCommand(message: Message): Promise<void> {
-    // ignore bot messages and messages that don't start with prefix
-    if (message.author.bot || !message.content.startsWith(this.PREFIX_FRAME)) return;
+    if (message.author.bot || !message.content.startsWith(this.PREFIX_FRAME)) return
 
     try {
-      // extract search term (everything after the prefix and a space)
-      const searchTerm = message.content.slice(this.PREFIX_FRAME.length).trim();
+      const searchTerm = message.content.slice(this.PREFIX_FRAME.length).trim()
       
-      const db = DatabaseManager.getInstance();
-      let mediaItems = [];
+      const db = DatabaseManager.getInstance()
+      let mediaItems = []
       
-      // if no search term, get random media that ends with .mp4
       if (!searchTerm) {
-        // get multiple items to filter for mp4 files
-        const allMedia = await db.getRandomMedia(undefined, undefined, undefined, 20);
-        mediaItems = allMedia.filter(m => m.file_path.toLowerCase().endsWith('.mp4'));
+        // get random video files by filtering mp4 only
+        const allMedia = await db.getRandomMedia(undefined, undefined, undefined, 20)
+        mediaItems = allMedia.filter(m => m.file_path.toLowerCase().endsWith('.mp4'))
         
-        // if no mp4 files found in random selection, try again with more items
+        // if no mp4s, try again with larger sample
         if (mediaItems.length === 0) {
-          const moreMedia = await db.getRandomMedia(undefined, undefined, undefined, 50);
-          mediaItems = moreMedia.filter(m => m.file_path.toLowerCase().endsWith('.mp4'));
+          const moreMedia = await db.getRandomMedia(undefined, undefined, undefined, 50)
+          mediaItems = moreMedia.filter(m => m.file_path.toLowerCase().endsWith('.mp4'))
         }
         
-        // shuffle the filtered items
-        if (mediaItems.length > 1) {
-          // fisher-yates shuffle
-          for (let i = mediaItems.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [mediaItems[i], mediaItems[j]] = [mediaItems[j], mediaItems[i]];
-          }
+        // take just one random video
+        if (mediaItems.length > 0) {
+          const randomIndex = Math.floor(Math.random() * mediaItems.length)
+          mediaItems = [mediaItems[randomIndex]]
         }
-        
-        // take just one random mp4 file
-        mediaItems = mediaItems.slice(0, 1);
       } else {
-        // search for media with matching title
-        const searchResults = await db.getMediaByTitle(searchTerm);
-        // filter for mp4 files
-        mediaItems = searchResults.filter(m => m.file_path.toLowerCase().endsWith('.mp4'));
+        // search for videos with title match
+        const searchResults = await db.getMediaByTitle(searchTerm)
+        mediaItems = searchResults.filter(m => m.file_path.toLowerCase().endsWith('.mp4'))
       }
       
       if (mediaItems.length === 0) {
-        await message.reply(`no mp4 video files found ${searchTerm ? `matching "${searchTerm}"` : ""} (￣︿￣)`);
-        return;
+        await message.reply(`no mp4 video files found ${searchTerm ? `matching "${searchTerm}"` : ""} (￣︿￣)`)
+        return
       }
       
-      // use the first (best) match
-      const media = mediaItems[0];
+      const media = mediaItems[0]
       
-      // prefer normalized path if available
-      const filePath = media.normalized_path || media.file_path;
+      // use original file path NOT normalized
+      const filePath = media.file_path
       
-      // check if file exists
       if (!fs.existsSync(filePath)) {
-        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`);
-        return;
+        console.error(`media file not found: ${filePath} (id: ${media.id})`)
+        await message.reply(`media file doesn't exist on disk (╯°□°）╯︵ ┻━┻ id: ${media.id}`)
+        return
       }
       
-      // get audio player to extract random frame
-      const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance();
+      const audioPlayer = (await import('./audioPlayerManager')).AudioPlayerManager.getInstance()
       
-      // show typing indicator where it exists
       try {
-        // use "as any" to bypass the type checking
-        const channel = message.channel as any;
+        const channel = message.channel as any
         if (channel.sendTyping) {
-          await channel.sendTyping();
+          await channel.sendTyping()
         }
       } catch (e) {
-        // ignore error
+        // whatever
       }
       
       try {
-        // extract random frame using direct method (never returns null due to chance)
-        const framePath = await audioPlayer.getRandomScreencapDirect(media.id, filePath);
+        const framePath = await audioPlayer.getRandomScreencapDirect(media.id, filePath)
         if (!framePath) {
-          await message.reply(`failed to extract frame (╬ಠ益ಠ)`);
-          return;
+          await message.reply(`failed to extract frame (╬ಠ益ಠ)`)
+          return
         }
         
-        // post the frame
-        const attachment = new AttachmentBuilder(framePath, { name: `frame_${media.id}.jpg` });
+        const attachment = new AttachmentBuilder(framePath, { name: `frame_${media.id}.jpg` })
         await message.reply({ 
           content: `random frame from "${media.title}" (id: ${media.id}) (￣▽￣)`,
           files: [attachment] 
-        });
+        })
         
-        // cleanup temp file after a delay to ensure discord has time to process it
         setTimeout(() => {
           if (fs.existsSync(framePath)) {
             try {
-              fs.unlinkSync(framePath);
+              fs.unlinkSync(framePath)
             } catch (err) {
-              console.error(`failed to clean up frame: ${err}`);
+              console.error(`failed to clean up frame: ${err}`)
             }
           }
-        }, 60000);
+        }, 60000)
       } catch (error) {
-        console.error('error extracting/posting frame:', error);
-        await message.reply(`failed to extract frame (╬ಠ益ಠ)`);
+        console.error('error extracting/posting frame:', error)
+        await message.reply(`failed to extract frame (╬ಠ益ಠ)`)
       }
     } catch (error) {
-      console.error('error handling frame command:', error);
-      await message.reply('something broke (╯°□°）╯︵ ┻━┻');
+      console.error('error handling frame command:', error)
+      await message.reply('something broke (╯°□°）╯︵ ┻━┻')
     }
   }
 }
