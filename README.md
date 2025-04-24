@@ -11,6 +11,7 @@ audio quiz bot for discord servers! listen to clips and guess what they are.
 - automatic conversion of webm/mkv/m4a to mp4 for discord
 - scores and leaderboards
 - filtering by tags and years
+- media effects with chat commands
 
 ## setup
 
@@ -107,3 +108,65 @@ npm run migrate
 ```
 
 this will add any necessary database columns and normalize your media files.
+
+## media effects system
+
+apply cool effects to your media with chat commands:
+
+### basic command prefixes
+
+```
+..o    - play random media with effects
+..oc   - play random clip with effects
+..of   - extract random frame with effects
+..op   - post previous media from last round
+```
+
+### params format
+
+```
+..o.c=10.s=30.bass.echo=2.pixelize.search term
+```
+
+- `c=10` sets clip length to 10 seconds
+- `s=30` sets start time to 30 seconds
+- `bass` adds bass boost effect
+- `echo=2` adds echo effect twice (stacked)
+- `pixelize` adds pixelization effect
+- everything after params is the search term
+
+### available audio effects
+
+- `bass` - boost bass frequencies
+- `echo` - add echo/delay effect
+- `reverse` - play audio backwards
+- `slow` - slow down audio (0.75x)
+- `fast` - speed up audio (1.5x)
+- `robot` - add robotic voice effect
+- `vibrato` - add vibrato effect
+- `chorus` - add chorus effect
+- `phaser` - add phaser effect
+
+### available video effects
+
+- `pixelize` - add pixel blur effect
+- `reverse` - play video backwards
+- `drunk` - add wobbly drunk effect
+- `oscilloscope` - show audio as oscilloscope
+- `vectorscope` - show audio as vectorscope
+- `interlace` - add interlace effect
+- `random` - add random noise
+- `amplify` - boost colors and contrast
+- `360` - fisheye lens effect
+
+### examples
+
+```
+..o                          - random media with no effects
+..o.bass.echo                - random media with bass boost and echo
+..oc.c=5.slow.reverse        - 5s clip played slowly in reverse
+..of.s=120.pixelize          - frame from 2min mark with pixelization
+..o.echo=3.robot.song name   - search "song name" with triple echo + robot filter
+```
+
+multiple effects can be combined for extra weirdness 
